@@ -1,0 +1,423 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Stand-in plan",
+  "description": "A demo plan or shared site profile for Stand-in. See docs/plan-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "target": {
+      "description": "What to act on. Prefer role+name, label, placeholder or text; fall back to css.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Raw Playwright selector, e.g. \"nav >> text=Docs\"."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string",
+              "description": "ARIA role: button, link, textbox, searchbox, checkbox, tab, menuitem, combobox, option, heading\u2026",
+              "examples": [
+                "button",
+                "link",
+                "textbox",
+                "searchbox",
+                "checkbox",
+                "radio",
+                "combobox",
+                "tab",
+                "menuitem",
+                "option",
+                "switch",
+                "heading",
+                "dialog"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "description": "Accessible name (substring match unless exact)."
+            },
+            "text": {
+              "type": "string",
+              "description": "Visible text."
+            },
+            "label": {
+              "type": "string",
+              "description": "Form control by its <label>."
+            },
+            "placeholder": {
+              "type": "string",
+              "description": "Input placeholder."
+            },
+            "testId": {
+              "type": "string",
+              "description": "data-testid value."
+            },
+            "css": {
+              "type": "string",
+              "description": "CSS selector."
+            },
+            "exact": {
+              "type": "boolean",
+              "description": "Exact (case-sensitive, whole-string) match for name/text/label/placeholder."
+            },
+            "nth": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Pick the nth match (0-based)."
+            },
+            "within": {
+              "$ref": "#/definitions/target",
+              "description": "Only search inside this element."
+            },
+            "frame": {
+              "description": "CSS selector of the <iframe> containing the target (array for nested frames, outermost first).",
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "x": {
+              "type": "number",
+              "description": "drag `to` only: viewport x."
+            },
+            "y": {
+              "type": "number",
+              "description": "drag `to` only: viewport y."
+            }
+          }
+        }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "click",
+            "type",
+            "press",
+            "hover",
+            "move",
+            "scroll",
+            "drag",
+            "select",
+            "check",
+            "uncheck",
+            "wait",
+            "waitFor",
+            "waitForStable",
+            "caption",
+            "highlight",
+            "goto",
+            "evaluate"
+          ]
+        },
+        "target": {
+          "$ref": "#/definitions/target"
+        },
+        "to": {
+          "$ref": "#/definitions/target",
+          "description": "drag destination, or scroll-to element."
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "type: text to type. caption: caption text (null hides)."
+        },
+        "submit": {
+          "type": "boolean",
+          "description": "type: press Enter afterwards."
+        },
+        "clear": {
+          "type": "boolean",
+          "description": "type: clear the field first."
+        },
+        "delay": {
+          "type": "number",
+          "description": "type: ms per character (default 65)."
+        },
+        "key": {
+          "type": "string",
+          "description": "press: key or chord, e.g. Enter, Escape, ControlOrMeta+K."
+        },
+        "double": {
+          "type": "boolean"
+        },
+        "button": {
+          "enum": [
+            "left",
+            "right",
+            "middle"
+          ]
+        },
+        "at": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "Click point as [fx, fy] fractions of the element box."
+        },
+        "ms": {
+          "type": "number",
+          "description": "wait / hover dwell / highlight duration in ms."
+        },
+        "by": {
+          "type": "number",
+          "description": "scroll: pixels (negative = up)."
+        },
+        "pages": {
+          "type": "number",
+          "description": "scroll: viewport-heights (default 1)."
+        },
+        "block": {
+          "enum": [
+            "start",
+            "center",
+            "end"
+          ],
+          "description": "scroll to: where the element lands."
+        },
+        "duration": {
+          "type": "number",
+          "description": "scroll/drag/move duration in ms."
+        },
+        "value": {
+          "type": "string",
+          "description": "select: option value."
+        },
+        "label": {
+          "type": "string",
+          "description": "select: option label."
+        },
+        "url": {
+          "type": "string",
+          "description": "goto: URL. waitFor: URL glob."
+        },
+        "state": {
+          "type": "string",
+          "description": "waitFor: visible|hidden|attached, or load|networkidle when no target."
+        },
+        "quietMs": {
+          "type": "number",
+          "description": "waitForStable: how long content must stay unchanged (default 1500)."
+        },
+        "maxMs": {
+          "type": "number",
+          "description": "waitForStable: give up after this long (default 90000)."
+        },
+        "minLength": {
+          "type": "number",
+          "description": "waitForStable: minimum text length before it can count as done."
+        },
+        "js": {
+          "type": "string",
+          "description": "evaluate: JavaScript to run in the page."
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "pauseAfter": {
+          "type": "number",
+          "description": "ms to hold after this step (overrides the per-action default)."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "Skip instead of failing if the target never appears."
+        },
+        "timeout": {
+          "type": "number",
+          "description": "ms to wait for the target (default: plan timeout)."
+        },
+        "note": {
+          "type": "string",
+          "description": "Free text shown in logs/report: which part of the request this implements."
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "extends": {
+      "type": "string",
+      "description": "Site profile to inherit from (relative path). setup/redact/hide are concatenated."
+    },
+    "description": {
+      "type": "string",
+      "description": "The one-line feature description this demo implements."
+    },
+    "notes": {
+      "type": "string",
+      "description": "What inspect found about the page (selectors, frames), for future plans."
+    },
+    "url": {
+      "type": "string",
+      "description": "First page, loaded before recording starts. A path without a scheme is a local file relative to this JSON."
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/step"
+      },
+      "description": "Recorded actions."
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/step"
+      },
+      "description": "Actions run before recording (login, dismiss banners)."
+    },
+    "viewport": {
+      "type": "object",
+      "properties": {
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Output video size (default 1920x1080)."
+    },
+    "zoom": {
+      "type": "number",
+      "description": "CSS zoom; 1.25\u20131.5 makes small panels legible at 1080p."
+    },
+    "fps": {
+      "type": "integer",
+      "description": "Default 60; 120 only on 120Hz Macs (headful)."
+    },
+    "audio": {
+      "type": "boolean"
+    },
+    "pace": {
+      "enum": [
+        "relaxed",
+        "normal",
+        "brisk"
+      ]
+    },
+    "cursor": {
+      "type": "boolean"
+    },
+    "accent": {
+      "type": "string"
+    },
+    "colorScheme": {
+      "enum": [
+        "light",
+        "dark"
+      ]
+    },
+    "locale": {
+      "type": "string"
+    },
+    "constantFrameRate": {
+      "type": "boolean"
+    },
+    "profileDir": {
+      "type": "string",
+      "description": "Signed-in browser session folder (e.g. ../.sessions/my-site), created by `record.mjs login --site <name>-signed-in`."
+    },
+    "connect": {
+      "type": "string",
+      "description": "CDP endpoint of a running Chrome, e.g. http://127.0.0.1:9222."
+    },
+    "storageState": {
+      "type": "string"
+    },
+    "redact": {
+      "type": "array",
+      "description": "CSS selectors to blur in every frame.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string"
+              },
+              "style": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      }
+    },
+    "hide": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "CSS selectors to make invisible."
+    },
+    "blurPx": {
+      "type": "number"
+    },
+    "leadInMs": {
+      "type": "number"
+    },
+    "tailMs": {
+      "type": "number"
+    },
+    "timeout": {
+      "type": "number"
+    },
+    "headful": {
+      "type": "boolean"
+    },
+    "chrome": {
+      "type": "string"
+    },
+    "chromeArgs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ignoreHTTPSErrors": {
+      "type": "boolean",
+      "description": "For test/staging environments that use internal certificates."
+    },
+    "output": {
+      "type": "string"
+    },
+    "overlay": {
+      "type": "object"
+    },
+    "loginUrl": {
+      "type": "string",
+      "description": "Signed-in site profiles: page `record.mjs login --site \u2026` opens for the one-time manual sign-in (defaults to url)."
+    }
+  }
+}

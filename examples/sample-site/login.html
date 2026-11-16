@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sign in — Harbor Financial</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px/1.5 system-ui,sans-serif;background:#eef2f6;color:#0b1f33}
+  form{background:#fff;padding:40px;border-radius:16px;width:400px;box-shadow:0 20px 50px #0b1f3322}
+  h1{margin:0 0 20px;font-size:24px} label{display:block;font-weight:600;font-size:14px;margin:12px 0 6px}
+  input{width:100%;box-sizing:border-box;padding:11px;border:1px solid #c5ced8;border-radius:8px;font:inherit}
+  button{margin-top:20px;width:100%;padding:12px;border:0;border-radius:8px;background:#1d5c3a;color:#fff;font:inherit;font-weight:600}
+</style></head><body>
+<form id="f"><h1>Harbor Financial</h1>
+  <label for="u">Username</label><input id="u" autocomplete="username">
+  <label for="p">Password</label><input id="p" type="password" autocomplete="current-password">
+  <button>Log in</button></form>
+<script>
+  if (localStorage.session) location.replace('portal.html');
+  f.onsubmit = e => { e.preventDefault(); if (u.value && p.value) { localStorage.session = u.value; location.href = 'portal.html'; } };
+</script></body></html>

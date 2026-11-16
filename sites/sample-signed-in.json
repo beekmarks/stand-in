@@ -1,0 +1,11 @@
+{
+  "extends": "sample.json",
+  "url": "../examples/sample-site/portal.html",
+  "redact": [".portfolio-total", ".acct-balance", ".acct-number"],
+  "hide": ["#survey"],
+  "setup": [
+    {"action": "type", "target": {"label": "Username"}, "text": "jordan", "note": "The sample site has a plain demo login, so setup signs in. Real sites with MFA use profileDir + `login` instead."},
+    {"action": "type", "target": {"label": "Password"}, "text": "demo-password", "submit": true},
+    {"action": "waitFor", "url": "**/portal.html"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  // Autocomplete, hover docs and validation for demo plans and site profiles.
+  "json.schemas": [
+    {
+      "fileMatch": ["/demos/**/*.json", "/sites/*.json", "/docs/example-plan.json"],
+      "url": "./tools/recorder/plan.schema.json"
+    }
+  ],
+  "files.exclude": {".sessions": true, "tools/recorder/node_modules": true},
+  "search.exclude": {".runs": true, "recordings": true, "examples": true}
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Assistant</title>
+<style>
+  *{box-sizing:border-box} html,body{margin:0;height:100%} body{display:flex;flex-direction:column;font:15px/1.5 system-ui,sans-serif;color:#0b1f33}
+  .top{padding:16px 18px;background:#0b1f33;color:#fff;font-weight:600}
+  .top small{display:block;font-weight:400;color:#9fb4c8}
+  #log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#f7f9fb}
+  .msg{max-width:86%;padding:10px 14px;border-radius:14px;white-space:pre-wrap}
+  .user{align-self:flex-end;background:#1d5c3a;color:#fff;border-bottom-right-radius:4px}
+  .bot{align-self:flex-start;background:#fff;border:1px solid #dde3ea;border-bottom-left-radius:4px}
+  .typing span{display:inline-block;width:7px;height:7px;margin:0 2px;border-radius:50%;background:#8aa0b4;animation:b 1s infinite}
+  .typing span:nth-child(2){animation-delay:.15s} .typing span:nth-child(3){animation-delay:.3s}
+  @keyframes b{50%{transform:translateY(-5px)}}
+  .chips{display:flex;flex-wrap:wrap;gap:8px} .chip{border:1px solid #1d5c3a;color:#1d5c3a;background:#fff;border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+  form{display:flex;gap:8px;padding:12px;border-top:1px solid #dde3ea}
+  textarea{flex:1;resize:none;height:44px;padding:11px;border:1px solid #c5ced8;border-radius:10px;font:inherit}
+  form button{padding:0 16px;border:0;border-radius:10px;background:#1d5c3a;color:#fff;font:inherit;font-weight:600}
+  .bars{display:flex;align-items:flex-end;gap:10px;height:120px;margin-top:8px} .bars div{flex:1;background:#2f8a5b;border-radius:4px 4px 0 0;transform-origin:bottom;animation:g .8s ease-out both}
+  @keyframes g{from{transform:scaleY(0)}} .lbl{display:flex;gap:10px;font-size:12px;color:#5a6b7d} .lbl span{flex:1;text-align:center}
+</style></head><body>
+<div class="top">Assistant <small>Ask about your accounts, goals and markets</small></div>
+<div id="log" role="log" aria-live="polite">
+  <div class="msg bot" id="greet">Hi Jordan! What can I help you with today?</div>
+  <script>if (location.search.includes('guest')) greet.textContent = 'Hi there! What can I help you with today?';</script>
+  <div class="chips" id="starter"><button class="chip">How am I tracking for retirement?</button><button class="chip">Explain my fees</button></div>
+</div>
+<form id="f"><textarea id="q" placeholder="Ask a question" aria-label="Ask a question"></textarea><button aria-label="Send">Send</button></form>
+<script>
+  const ANSWERS = [
+    [/401|contribut/i, "So far this year you've contributed $14,250 to your 401(k), plus $4,275 in employer match. That puts you on pace for $19,600 by December, $3,400 short of the $23,000 annual limit.\n\nIncreasing your contribution by 3% would close most of that gap.", ['Show me a chart', 'How do I change my contribution?']],
+    [/chart/i, "Here's how your contributions have built up each quarter:", ['What is the annual limit?'], true],
+    [/open.*account/i, "Opening an account takes about 10 minutes:\n\n1. Choose an account type (brokerage, IRA, or cash management).\n2. Enter your personal details and Social Security number.\n3. Fund it by bank transfer, check, or a rollover.\n\nYou can start investing as soon as the money arrives.", ['Which account is right for me?', 'Start an application']],
+    [/retire/i,"Based on your current savings rate, you're on track to replace about 78% of your income in retirement.", ['What could improve that?']],
+    [/.*/, "Good question. Here's a quick overview based on your accounts and recent activity.", ['Tell me more']],
+  ];
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const add = (cls, html) => { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; log.append(d); log.scrollTop = log.scrollHeight; return d; };
+  async function ask(text) {
+    document.querySelectorAll('.chips').forEach(c => c.remove());
+    add('msg user', '').textContent = text;
+    const t = add('msg bot typing', '<span></span><span></span><span></span>'); t.setAttribute('aria-busy', 'true');
+    await sleep(900 + Math.random() * 900);          // "thinking"
+    const [, answer, chips, chart] = ANSWERS.find(([re]) => re.test(text));
+    t.className = 'msg bot answer'; t.textContent = '';
+    for (const tok of answer.split(/(\s+)/)) {        // streamed tokens with jitter
+      t.textContent += tok; log.scrollTop = log.scrollHeight; await sleep(25 + Math.random() * 60);
+    }
+    if (chart) {
+      t.insertAdjacentHTML('beforeend', '<div class="bars"><div style="height:30%"></div><div style="height:55%;animation-delay:.1s"></div><div style="height:80%;animation-delay:.2s"></div><div style="height:100%;animation-delay:.3s"></div></div><div class="lbl"><span>Q1</span><span>Q2</span><span>Q3</span><span>Q4*</span></div>');
+      await sleep(900);
+    }
+    t.removeAttribute('aria-busy');
+    const c = add('chips', chips.map(x => `<button class="chip">${x}</button>`).join('')); log.scrollTop = log.scrollHeight;
+  }
+  log.addEventListener('click', e => { if (e.target.classList.contains('chip')) ask(e.target.textContent); });
+  f.onsubmit = e => { e.preventDefault(); if (q.value.trim()) { ask(q.value.trim()); q.value = ''; } };
+  q.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); } });
+</script></body></html>

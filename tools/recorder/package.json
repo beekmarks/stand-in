@@ -1,0 +1,12 @@
+{
+  "name": "stand-in",
+  "private": true,
+  "description": "Scripted 1080p60 demo recordings via Chrome 153+ native tab recording (Page.startScreenRecording)",
+  "type": "module",
+  "engines": {"node": ">=22.18"},
+  "bin": {"stand-in": "record.mjs"},
+  "dependencies": {
+    "chrome-capture": "0.1.2",
+    "playwright-core": "1.65.1"
+  }
+}

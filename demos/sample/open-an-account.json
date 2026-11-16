@@ -1,0 +1,9 @@
+{
+  "extends": "../../sites/sample.json",
+  "description": "Click on the Harbor Assistant link in the nav bar and ask 'How do I open an account?'",
+  "steps": [
+    {"action": "click", "target": {"role": "link", "name": "Harbor Assistant"}},
+    {"action": "type", "target": {"frame": "#panel", "placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},
+    {"action": "waitForStable", "target": {"frame": "#panel", "css": ".answer"}, "pauseAfter": 3500}
+  ]
+}

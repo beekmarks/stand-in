@@ -1,0 +1,8 @@
+{
+  "url": "../examples/sample-site/home.html",
+  "zoom": 1.5,
+  "pace": "relaxed",
+  "hide": [],
+  "setup": [],
+  "notes": "Bundled sample site (fictional 'Harbor Financial'). Assistant: nav link 'Harbor Assistant' (signed out) or button 'Open Assistant' (signed in) opens iframe '#panel'; input placeholder 'Ask a question'; answers have class '.answer'; follow-up suggestions are buttons."
+}

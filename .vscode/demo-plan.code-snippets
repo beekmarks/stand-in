@@ -1,0 +1,64 @@
+{
+  // Type the prefix inside a plan's "steps" array and press Tab.
+  "Demo: new plan": {
+    "scope": "json,jsonc", "prefix": "demo-plan",
+    "body": [
+      "{",
+      "  \"extends\": \"../../sites/${1:my-site}.json\",",
+      "  \"description\": \"${2:One-line description of the feature}\",",
+      "  \"steps\": [",
+      "    $0",
+      "  ]",
+      "}"
+    ],
+    "description": "Skeleton for a new demo plan in demos/<folder>/"
+  },
+  "Demo: ask the Assistant": {
+    "scope": "json,jsonc", "prefix": "demo-ask",
+    "body": [
+      "{\"action\": \"type\", \"target\": {${1:\"frame\": \"${2:#assistant-frame}\", }\"placeholder\": \"${3:Ask a question}\"}, \"text\": \"${4:How do I open an account?}\", \"submit\": true},",
+      "{\"action\": \"waitForStable\", \"target\": {${1}\"css\": \"${5:body}\"}, \"pauseAfter\": ${6:3000}}"
+    ],
+    "description": "Chat/assistant: type a question, send it, and hold until the streamed answer has finished"
+  },
+  "Demo: click": {
+    "scope": "json,jsonc", "prefix": "demo-click",
+    "body": ["{\"action\": \"click\", \"target\": {\"role\": \"${1|link,button,tab,menuitem,checkbox|}\", \"name\": \"${2:Visible name}\"}}"],
+    "description": "Click an element by its role and visible name"
+  },
+  "Demo: type": {
+    "scope": "json,jsonc", "prefix": "demo-type",
+    "body": ["{\"action\": \"type\", \"target\": {\"${1|label,placeholder|}\": \"${2:Field label}\"}, \"text\": \"${3:text}\"${4:, \"submit\": true}}"],
+    "description": "Type into a field (optionally press Enter)"
+  },
+  "Demo: wait for content to settle": {
+    "scope": "json,jsonc", "prefix": "demo-wait-stable",
+    "body": ["{\"action\": \"waitForStable\", \"target\": {\"css\": \"${1:body}\"}, \"pauseAfter\": ${2:2500}}"],
+    "description": "Hold until the element stops changing (streamed answers), then linger"
+  },
+  "Demo: pause": {
+    "scope": "json,jsonc", "prefix": "demo-wait",
+    "body": ["{\"action\": \"wait\", \"ms\": ${1:1500}}"],
+    "description": "Hold still for a moment"
+  },
+  "Demo: hover": {
+    "scope": "json,jsonc", "prefix": "demo-hover",
+    "body": ["{\"action\": \"hover\", \"target\": {\"${1|text,css|}\": \"${2}\"}, \"ms\": ${3:1000}}"],
+    "description": "Move the cursor over something and rest"
+  },
+  "Demo: scroll": {
+    "scope": "json,jsonc", "prefix": "demo-scroll",
+    "body": ["{\"action\": \"scroll\", \"to\": {\"css\": \"${1:#section}\"}, \"block\": \"${2|start,center|}\"}"],
+    "description": "Smooth-scroll to an element"
+  },
+  "Demo: caption": {
+    "scope": "json,jsonc", "prefix": "demo-caption",
+    "body": ["{\"action\": \"caption\", \"text\": \"${1:New: feature name}\"}"],
+    "description": "Show a caption bar (text: null hides it)"
+  },
+  "Demo: highlight": {
+    "scope": "json,jsonc", "prefix": "demo-highlight",
+    "body": ["{\"action\": \"highlight\", \"target\": {\"${1|text,css|}\": \"${2}\"}, \"ms\": ${3:1500}}"],
+    "description": "Ring + dim around an element to call attention to it"
+  }
+}
