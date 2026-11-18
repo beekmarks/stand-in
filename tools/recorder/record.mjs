@@ -423,7 +423,7 @@ function captureInit() {
 // Turns the raw event stream into plan steps (coalescing typing, scrolls, double-clicks, and adding waits
 // where the person paused to let something load or stream in).
 class StepBuilder {
-  constructor() { this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; }
+  constructor() { this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; this.lastSubmit = null; }
   same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   flush() {
     if (!this.typing) return;
@@ -436,21 +436,43 @@ class StepBuilder {
     this.steps.push(step);
     this.typing = null;
   }
-  // A pause after something that triggers loading/streaming becomes a waitForStable on that frame.
+  // A pause after something that triggers loading/streaming becomes a waitForStable.
+  // After a question is submitted (Enter in a text field, or a click right after typing, such as a Send
+  // button), the wait watches the area *around that field* (`around`), so it follows the answer in a chat
+  // panel instead of the whole page. Otherwise it watches the frame's body.
   gap(t, frame) {
     const g = this.lastT ? t - this.lastT : 0;
     const prev = this.steps.at(-1);
     if (g > 2500 && prev && !['wait', 'waitForStable', 'scroll'].includes(prev.action)) {
       const triggers = ['click', 'press', 'select', 'drag'].includes(prev.action) || (prev.action === 'type' && prev.submit);
+      const note = `captured: you paused ${(g / 1000).toFixed(1)}s here`;
+      const before = this.steps.at(-2);
+      const field = prev.action === 'type' && prev.submit ? prev.target
+        : (prev.action === 'click' || prev.action === 'press') && before?.action === 'type' && !before.submit ? before.target : null;
       const f = prev.target?.frame ?? frame;
-      if (triggers) this.steps.push({action: 'waitForStable', target: f ? {frame: f, css: 'body'} : {css: 'body'}, pauseAfter: 2500,
-        note: `captured: you paused ${(g / 1000).toFixed(1)}s here`});
+      // minMs: replies take roughly as long each time, so don't call it done before about half of the time
+      // it took while you demonstrated (minus the time you then spent reading). Covers "thinking" pauses
+      // where nothing on screen changes.
+      const minMs = Math.max(0, Math.min(15000, Math.round((g - 3000) * 0.5 / 100) * 100));
+      if (field && !String(prev.text ?? before?.text ?? '').startsWith('SET-ME'))
+        this.steps.push({action: 'waitForStable', around: field, ...(minMs ? {minMs} : {}), pauseAfter: 2500, note});
+      else if (triggers) this.steps.push({action: 'waitForStable', target: f ? {frame: f, css: 'body'} : {css: 'body'}, pauseAfter: 2500, note});
       else this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 3000)});
     }
+  }
+  // Chat boxes often fire one more input event right after Enter (the newline, or the box being cleared).
+  // That is part of submitting, not new typing; recording it would ask the question a second time.
+  isSubmitEcho(ev, target) {
+    const s = this.lastSubmit;
+    if (ev.kind !== 'input' || !s || !this.same(s.target, target) || ev.t - s.t > 1500) return false;
+    const v = String(ev.value ?? '').trim();
+    return v === '' || v === String(s.text ?? '').trim();
   }
   add(ev, frame) {
     const withFrame = tg => tg && frame ? {...tg, frame} : tg;
     const target = withFrame(ev.target);
+    if (this.isSubmitEcho(ev, target)) return false;
+    if (ev.kind !== 'input') this.lastSubmit = null;
     if (ev.kind !== 'input' && ev.kind !== 'enter') this.flush();
     if (!this.typing) this.gap(ev.t, frame);
     switch (ev.kind) {
@@ -460,7 +482,11 @@ class StepBuilder {
         else this.typing.text = ev.value;
         break;
       case 'enter':
-        if (this.typing && this.same(this.typing.target, target)) { this.typing.submit = true; this.flush(); }
+        if (this.typing && this.same(this.typing.target, target)) {
+          this.typing.submit = true;
+          this.lastSubmit = {target, text: this.typing.text, t: ev.t};
+          this.flush();
+        }
         else { this.flush(); this.steps.push({action: 'press', key: 'Enter'}); }
         break;
       case 'click': {
@@ -489,6 +515,7 @@ class StepBuilder {
     }
     for (const s of this.steps) if (s.action === 'scroll') s.by = Math.round(s.by);
     this.lastT = ev.t;
+    return true;
   }
   snapshot() {
     const steps = this.steps.map(x => ({...x}));
@@ -521,7 +548,7 @@ async function pageText(page, redact) {
 async function rawPageText(page) {
   const grab = () => {
     const t = (document.body?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    return {title: document.title, url: location.href, text: t.length > 5000 ? t.slice(0, 5000) + '\n…(truncated)' : t};
+    return {title: document.title, url: location.href, text: t.length > 20000 ? t.slice(0, 20000) + '\n…(truncated)' : t};
   };
   const main = await page.evaluate(grab).catch(() => null);
   let out = main ? `URL: ${main.url}\nTITLE: ${main.title}\n\n${main.text}\n` : '';
@@ -606,7 +633,21 @@ class Actor {
   async trueBox(loc) {
     const h = await loc.elementHandle().catch(() => null);
     if (!h) return null;
-    let r = await h.evaluate(e => { const b = e.getBoundingClientRect(); return {x: b.x, y: b.y, width: b.width, height: b.height}; });
+    // A link that wraps onto two lines has a bounding box covering both lines, and its centre is often plain
+    // text, not the link. So aim at one of the element's own line boxes: the first one whose centre really
+    // is the element (hit-tested), else the largest one.
+    let r = await h.evaluate(e => {
+      const whole = e.getBoundingClientRect();
+      const parts = [...e.getClientRects()].filter(b => b.width > 1 && b.height > 1);
+      if (parts.length < 2) return {x: whole.x, y: whole.y, width: whole.width, height: whole.height};
+      const hits = b => {
+        const t = e.ownerDocument.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+        return !!t && (t === e || e.contains(t));
+      };
+      const byArea = [...parts].sort((a, b) => b.width * b.height - a.width * a.height);
+      const b = byArea.find(hits) ?? byArea[0];
+      return {x: b.x, y: b.y, width: b.width, height: b.height};
+    });
     for (let f = await h.ownerFrame(); f?.parentFrame(); f = f.parentFrame()) {
       const fe = await f.frameElement();
       const t = await fe.evaluate(n => {
@@ -764,6 +805,92 @@ class Actor {
     await this.page.mouse.up();
   }
 
+  // waitForStable with `around`: wait for the answer to a question typed into the `around` field.
+  // 1) Wait until something near that field changes (the reply starts), up to `changeMs`.
+  // 2) Watch the smallest container of the field where that change happened (for example, the chat panel).
+  // 3) Done when it has stopped changing for `quietMs` and shows no loading or typing indicator.
+  // A site that never settles doesn't fail the run: the step ends at `maxMs` with a warning in the report.
+  async waitAround(step, timeout) {
+    const field = this.locator(step.around).last();
+    await field.waitFor({state: 'attached', timeout});
+    const sigs = () => field.evaluate(el => {
+      const busyIn = c => {
+        if (c.closest('[aria-busy="true"]')) return true;
+        const q = c.querySelectorAll('[aria-busy="true"],[role=progressbar],[class*="typing" i],[class*="thinking" i],' +
+          '[class*="spinner" i],[class*="loading" i]:not([class*="loaded" i]),[class*="ellipsis" i],[class*="skeleton" i]');
+        for (const n of q) {
+          const r = n.getBoundingClientRect(), cs = getComputedStyle(n);
+          if (r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity !== 0) return true;
+        }
+        return false;
+      };
+      const chain = [];
+      for (let n = el.parentElement ?? el.getRootNode()?.host; n; n = n.parentElement ?? n.getRootNode?.()?.host) {
+        chain.push(n);
+        if (n === document.body) break;
+      }
+      chain.reverse(); // outermost (body) first
+      return chain.map(c => {
+        const len = (c.innerText ?? '').length, count = c.querySelectorAll('*').length;
+        return {sig: `${len}:${count}`, len, count, busy: busyIn(c)};
+      });
+    });
+    const textAt = depth => field.evaluate((el, depth) => {
+      const chain = [];
+      for (let n = el.parentElement ?? el.getRootNode()?.host; n; n = n.parentElement ?? n.getRootNode?.()?.host) {
+        chain.push(n); if (n === document.body) break;
+      }
+      chain.reverse();
+      const t = (chain[Math.min(depth, chain.length - 1)]?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      return t.length > 4000 ? '…' + t.slice(-4000) : t;
+    }, depth).catch(() => '');
+    const quiet = step.quietMs ?? 2000, changeMs = step.changeMs ?? 20000, limit = step.maxMs ?? 90000;
+    const t0 = performance.now();
+    const base = await sigs();
+    // The reply is the deepest container of the field that has *grown* since the step started (new text or
+    // new elements). Small changes next to the field, such as a Send button turning into Stop, don't count.
+    // Changes that only show up at the page level (carousels, banners) are ignored for the first 5 s, so
+    // they aren't mistaken for the reply.
+    const deepestChange = now => {
+      if (!now) return -1;
+      if (now.length !== base.length) return Math.max(0, Math.min(now.length, base.length) - 1); // re-rendered
+      for (let i = now.length - 1; i >= 0; i--) if (now[i].len - base[i].len >= 15 || now[i].count - base[i].count >= 3) return i;
+      return now[0] && now[0].sig !== base[0].sig ? 0 : -1;
+    };
+    let depth = -1;
+    // 1) Wait for the reply to start.
+    while (depth < 0) {
+      await sleep(150);
+      const d = deepestChange(await sigs().catch(() => null));
+      if (d >= 1 || (d === 0 && performance.now() - t0 > 5000)) depth = d;
+      if (depth < 0 && performance.now() - t0 > changeMs) {
+        this.lastWait = {warning: `nothing changed near the field within ${changeMs} ms`, waitedMs: Math.round(performance.now() - t0)};
+        log(`  warning: waitForStable: ${this.lastWait.warning}; continuing`);
+        return;
+      }
+    }
+    // 2-3) Wait for it to settle.
+    let last = '', since = performance.now(), busySeen = false;
+    for (;;) {
+      const now = await sigs().catch(() => null);
+      const d = deepestChange(now);
+      if (d > depth) { depth = d; last = ''; } // the reply showed up deeper than the first change: follow it
+      const c = now?.[Math.min(depth, (now?.length ?? 1) - 1)];
+      const sig = c ? c.sig : '';
+      if (c?.busy) busySeen = true;
+      if (sig !== last || c?.busy) { last = sig; since = performance.now(); }
+      else if (performance.now() - since >= quiet && performance.now() - t0 >= (step.minMs ?? 0)) break;
+      if (performance.now() - t0 > limit) {
+        this.lastWait = {warning: `still changing after ${limit} ms`, waitedMs: Math.round(performance.now() - t0)};
+        log(`  warning: waitForStable: ${this.lastWait.warning}; continuing`);
+        this.lastWait.watched = await textAt(depth);
+        return;
+      }
+      await sleep(150);
+    }
+    this.lastWait = {waitedMs: Math.round(performance.now() - t0), busySeen, watched: await textAt(depth)};
+  }
+
   async run(step, timeout) {
     const p = this.page;
     switch (step.action) {
@@ -801,6 +928,7 @@ class Actor {
         else await p.waitForLoadState(step.state ?? 'networkidle', {timeout});
         break;
       case 'waitForStable': {
+        if (step.around) { await this.waitAround(step, timeout); break; }
         // For streamed content (chat/assistant answers): wait until the target stops changing for `quietMs`.
         const loc = step.target ? this.locator(step.target).last() : p.locator('body');
         await loc.waitFor({state: 'visible', timeout});
@@ -962,8 +1090,11 @@ async function frameChain(frame) {
   return chain.length === 0 ? null : chain.length === 1 ? chain[0] : chain;
 }
 
-async function captureSteps({ctx, page, plan, captureFile, captureRaw}) {
-  const builder = new StepBuilder();
+// Capture starts listening *before* the page is opened, so clicks made while a slow site is still loading
+// are kept. Only the profile's automatic `setup` steps (if any) are excluded: `armed` turns on after them.
+async function startCapture({ctx, page, captureFile, captureRaw, armed}) {
+  const state = {armed, builder: new StepBuilder()};
+  const builder = state.builder;
   let queue = Promise.resolve();
   const save = async steps => {
     await mkdir(dirname(captureFile), {recursive: true});
@@ -973,9 +1104,10 @@ async function captureSteps({ctx, page, plan, captureFile, captureRaw}) {
     await writeFile(captureFile.replace(/\.json$/i, '') + '.before-capture.json', JSON.stringify(captureRaw, null, 2) + '\n');
   }
   await ctx.exposeBinding('__demoCaptureEvent', ({frame}, ev) => {
+    if (!state.armed) return;
     queue = queue.then(async () => {
       const chain = await frameChain(frame).catch(() => null);
-      builder.add(ev, chain);
+      if (builder.add(ev, chain) === false) return;
       const typingStarted = ev.kind === 'input' && builder._last !== 'input';
       const shown = ev.kind === 'input' ? `typing into ${JSON.stringify(ev.target).slice(0, 80)}${ev.secret ? ' (password: not captured)' : ''}` :
         ev.kind === 'enter' ? `Enter (submits ${JSON.stringify(ev.secret ? '' : builder.steps.at(-1)?.text ?? '').slice(0, 60)})` :
@@ -987,17 +1119,34 @@ async function captureSteps({ctx, page, plan, captureFile, captureRaw}) {
     }).catch(e => log(`capture error: ${e.message}`));
   });
   await ctx.addInitScript(captureInit);
-  for (const f of page.frames()) await f.evaluate(captureInit).catch(() => {});
-  const badge = () => page.evaluate(() => window.__demoOverlay?.badge('● Capturing steps: close this window when done')).catch(() => {});
-  await badge();
+  const badge = () => page.evaluate(on => window.__demoOverlay?.badge(on ? '● Capturing steps: close this window when done'
+    : 'Preparing the page… please wait before clicking'), state.armed).catch(() => {});
+  page.on('domcontentloaded', badge);
   page.on('load', badge);
-  log('');
-  log(`CAPTURING into ${captureFile}`);
-  log('Do the demo in the browser window exactly as a user would. Click, type, scroll, and pause where the');
-  log('viewer should wait (e.g. while the Assistant answers). Close the window (or tab) when you are done.');
-  log('');
-  await new Promise(r => { page.once('close', r); ctx.once('close', r); });
-  await queue;
+  state.badge = badge;
+  state.arm = async () => {
+    state.armed = true;
+    for (const f of page.frames()) await f.evaluate(captureInit).catch(() => {});
+    await badge();
+  };
+  if (armed) {
+    log('');
+    log(`CAPTURING into ${captureFile}`);
+    log('Do the demo in the browser window exactly as a user would; you can start as soon as the page is usable,');
+    log('even if it is still loading. Click, type, scroll, and pause where the viewer should wait (e.g. while');
+    log('the Assistant answers). Close the window (or tab) when you are done.');
+    log('');
+  }
+  state.finish = async () => {
+    if (!state.armed) await state.arm();
+    await new Promise(r => { if (page.isClosed()) r(); page.once('close', r); ctx.once('close', r); });
+    await queue;
+    return finishCapture({builder, save, captureFile});
+  };
+  return state;
+}
+
+async function finishCapture({builder, save, captureFile}) {
   const steps = builder.finish(Date.now());
   await save(steps);
   log(`Captured ${steps.length} steps → ${captureFile}`);
@@ -1187,6 +1336,9 @@ common: --chrome PATH | --connect http://127.0.0.1:9222 | --headful`);
     process.exitCode = code;
   };
 
+  // Capture listens from the very start (see startCapture), but not during the profile's automatic setup.
+  const cap = captureMode ? await startCapture({ctx, page, captureFile, captureRaw, armed: !plan.setup.length}) : null;
+
   // ---- load + setup (never recorded) ----
   try {
     await page.goto(plan.url, {waitUntil: 'load', timeout: 45000});
@@ -1225,7 +1377,15 @@ common: --chrome PATH | --connect http://127.0.0.1:9222 | --headful`);
         const base = join(outDir, 'steps', `${String(i + 1).padStart(2, '0')}-${step.action}`);
         await mkdir(dirname(base), {recursive: true});
         // Text after every step (cheap, fine while recording); screenshots only in rehearsals.
-        await writeFile(base + '.txt', await pageText(page, plan.redact).catch(e => `(could not read page: ${e.message})`));
+        let txt = await pageText(page, plan.redact).catch(e => `(could not read page: ${e.message})`);
+        if (actor.lastWait) {
+          const w = actor.lastWait;
+          actor.lastWait = null;
+          entry.waited = {ms: w.waitedMs, ...(w.warning ? {warning: w.warning} : {})};
+          if (w.watched) txt = `===== WATCHED AREA (what the wait step followed; check the answer is complete) =====\n` +
+            `${maskText(w.watched, await secretsOf(page, plan.redact))}\n\n===== WHOLE PAGE =====\n` + txt;
+        }
+        await writeFile(base + '.txt', txt);
         entry.text = base + '.txt';
         if (!rec) { await page.screenshot({path: base + '.png'}).catch(() => {}); entry.screenshot = base + '.png'; }
       }
@@ -1235,11 +1395,20 @@ common: --chrome PATH | --connect http://127.0.0.1:9222 | --headful`);
     return true;
   };
 
+  if (cap && !cap.armed) await cap.badge();
   if (!(await runSteps(plan.setup, 'setup'))) return finish(1);
   if (plan.setup.length) await actor.settle();
 
   if (captureMode) {
-    await captureSteps({ctx, page, plan, captureFile, captureRaw});
+    if (!cap.armed) {
+      await cap.arm();
+      log('');
+      log(`CAPTURING into ${captureFile}`);
+      log('Do the demo in the browser window exactly as a user would. Click, type, scroll, and pause where the');
+      log('viewer should wait (e.g. while the Assistant answers). Close the window (or tab) when you are done.');
+      log('');
+    }
+    await cap.finish();
     report.mode = 'capture';
     return finish(0);
   }

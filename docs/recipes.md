@@ -73,6 +73,21 @@ Or make them invisible with `"hide": ["#survey-intercept"]`.
 
 ## Chat assistants and other streamed answers
 
+**If you capture the demo, this is handled for you.** Type the question, press Enter (or click Send), and wait
+for the whole answer before you do anything else. Capture then adds a step that waits for the answer around
+the box you typed into, including any "thinking" pause before it starts:
+
+```json
+{"action": "type", "target": {"placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},
+{"action": "waitForStable", "around": {"placeholder": "Ask a question"}, "minMs": 3000, "pauseAfter": 2500}
+```
+
+`minMs` comes from how long you waited while capturing, so the recording never moves on sooner than about
+half that time. After a rehearsal, the step's text file (`.runs/…/steps/NN-waitForStable.txt`) starts with a
+**WATCHED AREA** section showing the text the step followed: check that the whole answer is there.
+
+**Writing the plan by hand,** you can also point at the answer itself when you know where it appears:
+
 ```json
 {"action": "click", "target": {"role": "link", "name": "Assistant"}},
 {"action": "type", "target": {"frame": "#assistant-frame", "placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},
@@ -82,9 +97,12 @@ Or make them invisible with `"hide": ["#survey-intercept"]`.
 - **Find the panel:** run `inspect` with the assistant open (add the click that opens it to a copy of the
   site profile's `setup`), then look under `frames` in `elements.json` for its `frameSelector`, input and
   buttons. Record what you learn in the site profile's `notes`.
-- **Wait for the answer**, not a fixed delay: `waitForStable` on the newest reply (the last match is used)
-  holds until it stops changing; `pauseAfter` then gives viewers 2–3 s to read it (longer for long answers).
-  `{"css": "body"}` inside the frame works when there's no obvious answer selector.
+- **Wait for the answer**, not a fixed delay: `waitForStable` with `around` set to the question box needs no
+  knowledge of the page. On the newest reply (`target`, last match used) it holds until that stops changing.
+  `pauseAfter` then gives viewers 2–3 s to read it (longer for long answers). Avoid `{"css": "body"}` on
+  busy pages: banners and carousels elsewhere keep it changing.
+- **Slow "thinking" before the answer:** raise `minMs`, or `changeMs` if the answer takes more than 20 s to
+  start.
 - **Answers vary between runs** (and test backends can be slow). After recording, check that the answer is
   on-topic, complete and error-free: read `.runs/…/steps/NN-waitForStable.txt` or look at the contact sheet.
   If it's off, record again.

@@ -87,6 +87,11 @@ person's request, verbatim), and `"steps"`. Give each step a `note` quoting the 
   automatically; add `scroll` only when scrolling is part of the story.
 - **Let results land.** After anything the viewer should notice, `waitForStable` (streamed/async content) or
   `waitFor`, then `pauseAfter` of 1500–3000 ms. Cutting away before the payoff is the most common flaw.
+- **Chat answers:** after a `type` with `submit: true` (or a Send click), use
+  `{"action": "waitForStable", "around": <the same target as the type step>, "minMs": 3000}`. It finds the
+  answer near the question box by itself, rides out "thinking" pauses and loading indicators, and works on
+  pages full of other moving content. Raise `minMs` for slow assistants. Never wait on `{"css": "body"}` of a
+  busy page, and never type the question twice.
 - **Setup vs steps.** Pop-up dismissal and other prep belong in the site profile's `setup` (runs before
   recording, `optional: true` for things that may not appear). Never put credentials in `steps`.
 - **Sensitive data:** for signed-in demos, make sure the profile's `redact` covers account numbers, balances,
@@ -95,7 +100,9 @@ person's request, verbatim), and `"steps"`. Give each step a `note` quoting the 
 ### 5. Rehearse until it passes
 
 `demos/…json --rehearse`. Exit code 0 means every step ran. Then **verify, don't assume**: read each
-`.runs/<dir>/<demo>/steps/NN-<action>.txt` (the visible text of the page and iframes after that step) and
+`.runs/<dir>/<demo>/steps/NN-<action>.txt` (the visible text of the page and iframes after that step; a
+`waitForStable` with `around` puts the text it followed first, under WATCHED AREA, and any warning is in
+`report.json` as `waited.warning`) and
 check the flow does what was asked: the right item was opened, the answer appeared, and so on. Look at the
 matching `.png` files if you can view images.
 

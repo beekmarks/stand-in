@@ -214,9 +214,21 @@
           "type": "string",
           "description": "waitFor: visible|hidden|attached, or load|networkidle when no target."
         },
+        "around": {
+          "$ref": "#/definitions/target",
+          "description": "waitForStable: the text field a question was just typed into. Waits for the answer that appears around it (for example in a chat panel) to start and then stop changing. Capture adds this automatically."
+        },
         "quietMs": {
           "type": "number",
-          "description": "waitForStable: how long content must stay unchanged (default 1500)."
+          "description": "waitForStable: how long content must stay unchanged (default 1500; 2000 with `around`)."
+        },
+        "changeMs": {
+          "type": "number",
+          "description": "waitForStable with `around`: how long to wait for the answer to start appearing (default 20000)."
+        },
+        "minMs": {
+          "type": "number",
+          "description": "waitForStable with `around`: never finish sooner than this, to ride out pauses while the assistant is 'thinking'. Capture sets it from how long you waited."
         },
         "maxMs": {
           "type": "number",

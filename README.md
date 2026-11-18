@@ -191,17 +191,18 @@ kept as a backup.
 
 ## Demoing chat assistants
 
-Streamed answers are the main use case Stand-in was built for. After sending a message, add a `waitForStable`
-step that watches the answer:
+Streamed answers are the main use case Stand-in was built for, and **capture handles them for you**: type
+your question, press Enter or click Send, and wait for the whole answer before doing anything else.
+Capture adds a wait step that:
 
-```json
-{"action": "waitForStable", "target": {"frame": "#assistant-frame", "css": ".answer"}, "pauseAfter": 3000}
-```
+- finds the answer around the box you typed into, so you don't need to know how the page is built;
+- waits through any "thinking" pause and loading or typing indicator before the answer starts;
+- ignores banners, carousels and other content changing elsewhere on the page;
+- never moves on sooner than about half the time you waited while capturing.
 
-It waits until the **newest** match stops changing (1.5 s of quiet by default, with a 90 s maximum) and
-nothing inside it is marked `aria-busy`. `pauseAfter` then gives viewers time to read. Answers vary from
-run to run, so check the text snapshot or the video every time. See
-[Chat assistants](docs/recipes.md#chat-assistants-and-other-streamed-answers).
+After a rehearsal, the wait step's text file in `.runs/` starts with the answer it followed, so you can
+check it's complete. Answers vary from run to run, so check the text or the video every time. See
+[Chat assistants](docs/recipes.md#chat-assistants-and-other-streamed-answers) for tuning and hand-written plans.
 
 ## Hide sensitive information
 
