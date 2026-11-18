@@ -1,9 +1,13 @@
 # Stand-in
 
-Record repeatable, polished demo videos of **real, signed-in websites**, including AI chat assistants
-whose answers stream in. You do the flow once in Chrome; the recorder saves it as an editable **plan**,
-rehearses it, and records a 1920×1080 MP4 at a 60 fps target with a visible cursor, human-paced typing,
-captions and highlights.
+Record repeatable, polished demo videos of any website, **without writing code and without AI**.
+Everything runs from menus in VS Code. You click through the flow once in Chrome; Stand-in saves it as an
+editable **plan**, rehearses it, and records a 1920×1080 MP4 at a 60 fps target with a visible cursor,
+human-paced typing, captions and highlights. It works on signed-in sites and waits for AI chat
+assistants to finish streaming their answers.
+
+If you'd rather describe a demo in plain words, Stand-in also ships an **optional AI agent skill** that
+does the same work for you, using the same tasks and files.
 
 ![Stand-in recording the included sample site: asking an assistant about a 401(k), waiting for the streamed answer, following up with a chart, with captions and blurred balances](docs/demo.gif)
 
@@ -12,14 +16,38 @@ captions and highlights.
 > **Status: early prototype.** Built in November 2026 and tested mainly on the included sample site and
 > one public website. Expect rough edges, and please report them.
 
+## Two ways to use it
+
+**No AI, no code (the main way).** Stand-in was built so that anyone who can open VS Code can make a demo
+video. Every step is a VS Code task you pick from the Command Palette:
+
+| You run | What happens |
+| --- | --- |
+| **Demo: Capture new demo (do it yourself)** | Chrome opens; you click through the flow and close it. |
+| **Demo: Rehearse current plan** | The flow is replayed and checked, with a screenshot for every step. |
+| **Demo: Record current plan** | The finished MP4 is saved in `recordings/`. |
+
+No API keys, no AI subscription, no data sent to an AI service, and nothing to program. The only things
+you edit by hand, if you want to, are small JSON settings such as a caption's text.
+
+**With an AI agent (optional).** The included [agent skill](.github/skills/stand-in/SKILL.md) teaches an
+AI coding agent to do the whole job from a description like *"show someone asking the assistant how to
+open an account, then following the link in its answer."* The agent inspects the site, writes the plan,
+rehearses it, fixes failing steps, records the video and checks the result.
+
+The skill is restricted to the **same commands and files the VS Code tasks use**. It doesn't write its own
+browser scripts. So anything an agent makes is an ordinary plan that a person can open, edit, rehearse
+and re-record from the menus, with no AI involved. See [Let an AI agent do it](#optional-let-an-ai-agent-do-it).
+
 ## Is this the right tool?
 
 **A good fit if you want to:**
 
+- let people who don't write code, and don't use AI tools, produce demo videos from VS Code menus;
+- re-record the same demo later (after a UI change, or for a new environment) without redoing it by hand;
 - demo a website you don't control or can't run locally, behind a real sign-in and MFA;
 - demo an AI assistant and wait for its streamed answer to *finish* before moving on;
-- re-record the same demo later (after a UI change, or for a new environment) without redoing it by hand;
-- let people who don't write code produce the videos, from VS Code menus.
+- hand the whole job to an AI agent when you have one, and still get plans a person can maintain.
 
 **Probably not the right tool if you:**
 
@@ -65,12 +93,15 @@ signed-in sites and AI assistants.
 
 What Stand-in focuses on:
 
+- **No code and no AI required:** the whole loop runs from VS Code tasks. Most tools above expect you
+  to write scripts, or put an AI agent at the center;
+- **an optional agent skill that stays inside that same interface**, so AI-made demos remain plain plans
+  anyone can re-run;
 - **`waitForStable`**, a declarative plan step for streamed chat answers: it waits until the newest
   answer stops changing, including inside an iframe, instead of using a fixed delay;
 - **a separate rehearse stage** that writes reviewable artifacts for every step before any video is made;
 - **one-time human sign-in**: you complete MFA yourself once, and the session is reused privately;
-- **site profiles** that hold zoom, redaction, hidden pop-ups and setup steps for each site;
-- **VS Code tasks**, so the whole loop runs from the Command Palette with no code.
+- **site profiles** that hold zoom, redaction, hidden pop-ups and setup steps for each site.
 
 ## Limitations
 
@@ -104,7 +135,8 @@ What Stand-in focuses on:
 3. Open the Command Palette (**Cmd+Shift+P** on Mac, **Ctrl+Shift+P** on Windows/Linux), choose
    **Tasks: Run Task**, then **Demo: Install recorder (one-time)**.
 
-Every task below is run the same way: **Command Palette → Tasks: Run Task**.
+Every task below is run the same way: **Command Palette → Tasks: Run Task**. That's all you need; no AI
+tools or programming are involved anywhere in the next sections.
 
 ## Make your first video (about 5 minutes)
 
@@ -207,12 +239,31 @@ plans, URLs, terminal output or saved sessions. See
 opening `{`, save, and rehearse again. It helps with some connection errors but isn't a guaranteed fix.
 See [HTTPS troubleshooting](docs/recipes.md#https-connection-troubleshooting).
 
-## Optional: let GitHub Copilot write the plan
+## Optional: let an AI agent do it
 
-In Copilot Chat **agent mode**, describe the demo in plain words. Using the included
-[Copilot skill](.github/skills/stand-in/SKILL.md), Copilot can inspect the site, write and
-rehearse a plan, record it and check the result. You still sign in yourself, and the plan stays a
-normal file you can edit and re-run.
+Everything above works without AI. If you use an AI coding agent, the included skill can save you the
+clicking and the plan editing.
+
+**What the skill does.** Given a plain-English description of the demo, the agent:
+
+1. inspects the site to find the right buttons, fields and assistant panels (including iframes);
+2. writes the plan in `demos/`, with captions, waits for streamed answers and redaction where needed;
+3. rehearses it, reads the screenshots and fixes any failing step;
+4. records the video and checks it against your description.
+
+**What stays with you.** The agent can't sign in for you: when a site needs it, it asks you to run the
+sign-in step and complete MFA yourself. It also hands capture-by-demonstration back to you when you'd
+rather show the flow than describe it.
+
+**Why the results stay maintainable.** The skill may only use the commands behind the VS Code tasks and
+the documented plan format. It never writes custom Playwright or Puppeteer code or edits the recorder.
+Every demo it produces is a normal plan you can open, tweak and re-record from the menus later, even on a
+machine with no AI tools at all.
+
+**How to use it.** The skill lives in [`.github/skills/stand-in/SKILL.md`](.github/skills/stand-in/SKILL.md),
+where GitHub Copilot finds it: open Copilot Chat in **agent mode** and describe the demo you want. It's
+written in the standard `SKILL.md` format, so other agents that support skills can use the same file
+(for Claude Code, copy the folder to `.claude/skills/stand-in/`).
 
 ## Reference
 
