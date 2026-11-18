@@ -5,6 +5,10 @@ whose answers stream in. You do the flow once in Chrome; the recorder saves it a
 rehearses it, and records a 1920×1080 MP4 at a 60 fps target with a visible cursor, human-paced typing,
 captions and highlights.
 
+![Stand-in recording the included sample site: asking an assistant about a 401(k), waiting for the streamed answer, following up with a chart, with captions and blurred balances](docs/demo.gif)
+
+*Made with Stand-in from the included sample plan `demos/sample/401k-chart.json` (shown at 1.5× speed).*
+
 > **Status: early prototype.** Built in November 2026 and tested mainly on the included sample site and
 > one public website. Expect rough edges, and please report them.
 
