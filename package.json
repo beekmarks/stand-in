@@ -47,13 +47,16 @@
   },
   "scripts": {
     "test": "node --test test/*.test.cjs",
-    "package": "vsce package"
+    "package": "vsce package",
+    "package:skill": "node scripts/package-skill.cjs"
   },
   "dependencies": {
     "chrome-capture": "0.1.2",
     "playwright-core": "1.65.1"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.6.2"
+    "@vscode/vsce": "^3.6.2",
+    "yauzl": "^3.4.0",
+    "yazl": "^2.5.1"
   }
 }

@@ -1,7 +1,21 @@
 # Stand-in
 
-Make a video of a website in VS Code. Open the site, do your demo, and stop recording. Stand-in saves
-an MP4 video and an optional editable replay plan.
+Make a video of a website. Open the site, do your demo, and stop recording. Stand-in saves an MP4
+video and an optional editable replay plan.
+
+## Choose how to use Stand-in
+
+1. **VS Code extension:** Record yourself using a menu command. This is the simplest option without
+   an assistant. Follow the [setup below](#1-set-up-once).
+2. **Copilot skill:** Ask an assistant to record your requested actions or start a manual recording.
+   The extension includes the skill, or you can
+   [install the standalone skill](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension)
+   without the extension. The standalone skill's discovery in VS Code has not yet been verified.
+3. **Command line:** Run the recorder directly from a source checkout. See
+   [command-line instructions](#command-line-from-source).
+
+All options require Node.js and Chrome. The skill also requires a compatible Copilot setup.
+The rest of the first-time guide below uses the VS Code extension.
 
 **The shortcut is Control+Shift+9:** press it once to start and again to stop. On a Mac, use
 **Control**, not Command.
@@ -97,6 +111,30 @@ The bundled Stand-in skill can create an editable plan and record it. Skill avai
 Copilot setup and active agent. The assistant should not sign in for you, and a signed-in replay still
 needs your approval.
 
+You can also use Stand-in as a **standalone Copilot skill**, without the extension. See the
+[skill installation guide](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension).
+The standalone skill includes its recorder dependencies, but still requires Node.js and Chrome.
+
+## Command line from source
+
+For users comfortable with a terminal, install Node.js 24.11+ and Chrome 153+, then run these
+commands from a Stand-in source checkout:
+
+```sh
+npm ci --prefix tools/recorder
+node tools/recorder/record.mjs https://www.wikipedia.org
+```
+
+Prepare the page, then use **Control+Shift+9** to start and stop. Wait for the terminal to report
+the saved video and plan; they are placed in `recordings/` and `demos/` under the current folder.
+To replay a reviewed plan, run:
+
+```sh
+node tools/recorder/record.mjs replay demos/your-plan.json
+```
+
+Replay can change real data and may ask for confirmation, as described above.
+
 ## Need help?
 
 See [Troubleshooting](docs/recipes.md) for missing commands, Node or Chrome errors, shortcut problems,
@@ -108,3 +146,7 @@ want to try Stand-in. The [plan reference](docs/plan-format.md) covers advanced 
 For developers: install Node.js 24.11+, run `npm install`, then run `npm run package` in the repository.
 This creates a VSIX that can be installed as described above. The existing workspace tasks remain
 available to contributors working in this source checkout.
+
+To build the standalone skill ZIP instead, run `npm run package:skill`. The ZIP appears in `dist/`;
+share it with the skill installation instructions. Build it after `npm install`, and rebuild it when
+the skill, recorder, or plan reference changes.

@@ -2,10 +2,21 @@
 
 Stand-in makes a video of what you do on a website. You can try it without writing code.
 
-**Before you begin:** Your team will need to give you the Stand-in extension file. Its name ends in
-`.vsix`.
+**Choose how to use Stand-in:**
 
-## Set up once
+1. **VS Code extension:** Use a menu command and record the demo yourself. This is the simplest
+   option without an assistant; your team provides the `.vsix` file.
+2. **Copilot skill:** Ask an assistant to record the actions or start a manual recording. The skill
+   comes with the extension, or your team can provide the standalone skill ZIP. The standalone
+   skill's discovery in VS Code has not yet been verified.
+3. **Command line:** If you're comfortable with a terminal, see the
+   [command-line instructions](https://github.com/beekmarks/stand-in#command-line-from-source).
+
+You do not need both the extension and the standalone skill.
+
+## Option 1: use the VS Code extension
+
+### Set up once
 
 You need these on your computer:
 
@@ -19,14 +30,49 @@ You need these on your computer:
 If your company manages software installations, ask your IT team for help with any of these.
 After installing Node.js, fully quit and reopen VS Code.
 
-### Install Stand-in
+### Install the extension
 
 1. Open VS Code.
 2. Open the Command Palette: press **Cmd+Shift+P** on a Mac, or **Ctrl+Shift+P** on Windows/Linux.
 3. Type **Extensions: Install from VSIX** and select it.
 4. Choose the Stand-in `.vsix` file your team provided. Reload VS Code if prompted.
 
+## Option 2: use the Copilot skill without the extension
+
+**Pilot note:** Discovery of the standalone skill in VS Code has not yet been verified.
+
+You need VS Code with GitHub Copilot and agent skills available, Node.js 24.11 or newer, Chrome 153
+or newer, and the Stand-in skill ZIP from your team. See the download links in the setup list above.
+After installing Node.js, fully quit and reopen VS Code.
+
+1. Extract the ZIP. It contains this guide and a folder named `stand-in` with `SKILL.md` and
+   supporting files.
+2. Copy the entire `stand-in` folder into your personal `.copilot/skills` folder. This makes the
+   skill available across your workspaces. Create the `skills` folder if needed:
+   - Mac: in Finder, choose **Go > Go to Folder**, enter `~/.copilot`, then open or create `skills`.
+   - Windows: in File Explorer, enter `%USERPROFILE%\.copilot` in the address bar, then open or
+     create `skills`.
+   - Linux: open or create `~/.copilot/skills`.
+   If `.copilot` does not exist yet, create it in your home folder first.
+3. If a `stand-in` folder is already there, back it up or remove it before copying the new one; do
+   not merge versions. The final path should be `.copilot/skills/stand-in/SKILL.md`.
+4. Open a folder in VS Code for your videos. Start a new Copilot chat in a session that supports
+   skills. Type `/` and check for `stand-in`, or open **Chat: Open Customizations** and look under
+   **Skills**. If it is missing, check the folder path and your company's Copilot settings.
+5. Ask: **“Use Stand-in to record a demo of https://www.wikipedia.org. Search for space exploration
+   and show the result.”** Review and approve any requested tool actions.
+
+To drive the website yourself instead, say **“Use Stand-in to let me record a demo of
+https://www.wikipedia.org manually.”** The assistant will start the recorder and explain the
+shortcut. It should report where it saved the video and replay plan.
+
+The skill includes the recorder dependencies, so you do not need to install additional recorder
+packages. The extension's Command Palette commands are not available with the skill alone.
+Skill availability depends on the active agent and your company's Copilot settings.
+
 ## Make your first video
+
+These steps use the extension. For the skill, ask Copilot as described above.
 
 1. In VS Code, open the folder where you want to save the video. If you don't open one, Stand-in will
    ask you to choose a folder.
@@ -65,6 +111,7 @@ the demo or add effects later.
 
 Replay opens the website and performs the actions in your plan again, creating a new video. It does
 not edit the original MP4, and it may not reproduce the original exactly if the website has changed.
+With the standalone skill, ask Copilot to review and replay your plan instead of using the command below.
 
 1. Review the `.json` file in **demos**.
 2. Open the Command Palette, choose **Stand-in: Replay Plan**, and select the file.
