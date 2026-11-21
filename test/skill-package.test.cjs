@@ -59,7 +59,7 @@ test('standalone skill archive contains working, self-contained recorder resourc
     assert.match(execFileSync(process.execPath, ['record.mjs', '--help'], {cwd, encoding: 'utf8'}),
       /stand-in replay/);
     execFileSync(process.execPath, ['--input-type=module', '-e',
-      "await import('playwright-core'); await import('chrome-capture')"], {cwd});
+      "await import('playwright-core'); await import('chrome-capture'); await import('mediabunny')"], {cwd});
   } finally {
     await rm(temp, {recursive: true, force: true});
   }
@@ -95,6 +95,7 @@ test('extracted skill records a replay without the source repository',
       ], {cwd: temp, timeout: 55000});
       assert.equal(clicks, 1);
       assert.ok((await stat(video)).size > 1000);
+      assert.ok((await readFile(video)).includes('avcC'), 'The skill converts the video to H.264 too');
     } finally {
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       await rm(temp, {recursive: true, force: true});

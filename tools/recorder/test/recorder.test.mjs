@@ -222,7 +222,7 @@ test('the one-command CLI saves both files', {skip: process.platform === 'win32'
     const ready = new Promise(resolve => {
       const read = data => {
         output += data;
-        if (output.includes('Press Ctrl+Shift+9 in the page to start')) resolve();
+        if (/press Ctrl\+Shift\+9 in the page to start/i.test(output)) resolve();
       };
       child.stdout.on('data', read);
       child.stderr.on('data', read);
@@ -246,7 +246,16 @@ test('the one-command CLI saves both files', {skip: process.platform === 'win32'
     assert.equal(code, 0, output);
     const [videoName] = await readdir(join(cwd, 'recordings'));
     const [planName] = await readdir(join(cwd, 'demos'));
-    assert.ok((await readFile(join(cwd, 'recordings', videoName))).length > 1000);
+    // Readable local-time names, the same for the video and the plan.
+    assert.match(videoName, /^127\.0\.0\.1-\d{4}-\d\d-\d\d-\d\d-\d\d\.mp4$/);
+    assert.equal(planName, videoName.replace(/\.mp4$/, '.json'));
+    const videoBytes = await readFile(join(cwd, 'recordings', videoName));
+    assert.ok(videoBytes.length > 1000);
+    // Converted to H.264 so QuickTime on Intel Macs and other older players can open it.
+    assert.ok(videoBytes.includes('avcC') && !videoBytes.includes('av1C'), 'The video was not converted to H.264');
+    // The H.264 level must allow 60 fps at this size (level 3.1 here), or strict players refuse or stutter.
+    assert.ok(videoBytes[videoBytes.indexOf('avcC') + 7] >= 31, 'H.264 level too low for 60 fps');
+    assert.match(output, /Your video is ready: recordings\//);
     const plan = JSON.parse(await readFile(join(cwd, 'demos', planName), 'utf8'));
     assert.equal(plan.url, url);
     assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Click me'));
@@ -396,7 +405,7 @@ test('the installed symlink runs the CLI', async () => {
   await symlink(join(root, 'tools/recorder/record.mjs'), link);
   const result = spawnSync(process.execPath, [link, '--help'], {encoding: 'utf8'});
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /stand-in <https:\/\/website>/);
+  assert.match(result.stdout, /stand-in <website>/);
 });
 
 test('obsolete plans are rejected without changing their files', async () => {
@@ -472,4 +481,153 @@ test('pauses after a submitted question become waits for the answer', () => {
   // A pause at the end of the recording after a question also waits for the answer.
   steps = build(ask, 8000);
   assert.equal(steps.at(-1).action, 'waitForStable');
+});
+
+// A page with the things real sites throw at the recorder: a cookie banner, repeated links and test ids,
+// web components (shadow DOM) with slotted labels, a code editor inside a component, a date-like <select>,
+// an ad frame that doesn't scroll, and a submit button.
+const TRICKY_PAGE = `<!doctype html><meta charset="utf-8">
+<style>body{margin:0;font:16px sans-serif} .card{height:120px;border:1px solid #ccc;margin:8px}
+  .cookie-banner{position:fixed;bottom:0;left:0;right:0;background:#eee;padding:12px}</style>
+<div class="cookie-banner" id="cookies">We use cookies. <button onclick="cookies.remove()">Accept all</button></div>
+<div id="cards">${[1, 2, 3].map(n => `<div class="card"><h3>Story ${n}</h3>
+  <a href="#story-${n}" data-testid="card-link" onclick="document.body.dataset.story=${n}">Read more</a></div>`).join('')}</div>
+<fancy-button id="launch">Launch</fancy-button>
+<code-box></code-box>
+<label>Period <select id="period"><option value="0">3pm Fri, Nov 20</option><option value="12">5pm Sat, Nov 21</option></select></label>
+<form onsubmit="event.preventDefault(); document.body.dataset.saved = 1"><input type="submit" value="Save"></form>
+<iframe id="ad" srcdoc="<body style='margin:0;background:#fd0;height:100%'>Ad</body>" style="width:600px;height:200px;border:0"></iframe>
+<div style="height:3000px"></div>
+<script>
+customElements.define('fancy-button', class extends HTMLElement {
+  constructor() { super(); this.attachShadow({mode: 'open'}).innerHTML =
+    '<button aria-labelledby="l"><span id="l"><slot></slot></span></button>';
+    this.shadowRoot.querySelector('button').onclick = () => { document.body.dataset.launched = (+document.body.dataset.launched || 0) + 1; }; }
+});
+customElements.define('code-box', class extends HTMLElement {
+  constructor() { super(); this.attachShadow({mode: 'open'}).innerHTML =
+    '<div class="editor"><div class="content" contenteditable="true" style="min-height:40px;border:1px solid #999"></div></div>'; }
+});
+</script>`;
+
+test('capture copes with banners, repeated links, web components, frames and selects', {timeout: 60000}, async () => {
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(TRICKY_PAGE); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'tricky.json');
+  const click = async locator => {
+    const box = await locator.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(120);
+  };
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'tricky.mp4'), capture,
+      startRecording: async () => ({stop: async () => Buffer.from('video')})});
+    await page.goto(url);
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await click(page.getByRole('button', {name: 'Accept all'}));
+    await click(page.getByRole('link', {name: 'Read more'}).nth(1));
+    await click(page.getByRole('button', {name: 'Launch'}));
+    await click(page.locator('code-box .content'));
+    await page.keyboard.type('let x = 1;', {delay: 20});
+    await page.locator('#period').focus();
+    await page.keyboard.press('ArrowDown'); // a person's change, unlike selectOption()
+    await click(page.getByRole('button', {name: 'Save'}));
+    const ad = await page.locator('#ad').boundingBox();
+    await page.mouse.move(ad.x + 100, ad.y + 100);
+    for (let i = 0; i < 5; i++) { await page.mouse.wheel(0, 120); await page.waitForTimeout(40); }
+    await page.waitForTimeout(800);
+    await page.keyboard.press('Control+Shift+Digit9');
+    await done;
+    const {steps} = JSON.parse(await readFile(planPath, 'utf8'));
+    const find = action => steps.filter(s => s.action === action);
+    const clicks = find('click');
+    assert.deepEqual(clicks[0], {action: 'click', target: {role: 'button', name: 'Accept all'}, optional: true, timeout: 3000});
+    assert.deepEqual(clicks[1].target, {role: 'link', name: 'Read more', nth: 1});
+    assert.deepEqual(clicks[2].target, {role: 'button', name: 'Launch'});
+    assert.ok(!clicks.slice(1).some(s => s.optional), JSON.stringify(clicks));
+    const typed = find('type')[0];
+    assert.equal(typed.text, 'let x = 1;');
+    assert.match(typed.target.css, /code-box div\.editor > div\.content$/);
+    assert.deepEqual(find('select')[0], {action: 'select', target: {label: 'Period'}, label: '5pm Sat, Nov 21', value: '12'});
+    assert.deepEqual(clicks.at(-1).target, {role: 'button', name: 'Save'});
+    const scroll = find('scroll')[0];
+    assert.ok(scroll && !scroll.target && scroll.by > 300, JSON.stringify(steps));
+
+    // The plan finds the same elements again, even when the select's label has changed.
+    const replayPage = await ctx.newPage();
+    await replayPage.goto(url);
+    await replayPage.evaluate(() => { document.querySelector('#period option[value="12"]').textContent = '5pm Sun, Nov 22'; });
+    const {Actor} = await import('../record.mjs');
+    const actor = new Actor(replayPage, {viewport: {width: 1000, height: 700}, pace: 'brisk'});
+    for (const step of steps) {
+      try { await actor.run(step, step.timeout ?? 5000); } catch (error) { if (!step.optional) throw error; }
+    }
+    const state = await replayPage.evaluate(() => ({...document.body.dataset, period: document.querySelector('#period').value,
+      code: document.querySelector('code-box').shadowRoot.querySelector('.content').innerText, cookies: !!document.querySelector('#cookies'),
+      scrolled: scrollY}));
+    assert.deepEqual({...state, scrolled: state.scrolled > 300},
+      {story: '2', launched: '1', saved: '1', period: '12', code: 'let x = 1;', cookies: false, scrolled: true});
+  } finally {
+    await ctx.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('a pop-up that is already gone on replay is skipped quickly', {timeout: 30000}, async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  try {
+    await page.setContent('<button onclick="document.body.dataset.ok = 1">Continue</button>');
+    const {Actor} = await import('../record.mjs');
+    const actor = new Actor(page, {viewport: {width: 800, height: 600}, pace: 'brisk'});
+    const started = Date.now();
+    await assert.rejects(actor.run({action: 'click', target: {role: 'button', name: 'Accept all'}}, 3000), /Timeout 3000ms/);
+    assert.ok(Date.now() - started < 5000);
+    await actor.run({action: 'click', target: {role: 'button', name: 'Continue'}}, 3000);
+    assert.equal(await page.evaluate(() => document.body.dataset.ok), '1');
+  } finally { await ctx.close(); }
+});
+
+test('a failed replay explains the step in plain words and keeps the video so far', {timeout: 90000}, async () => {
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<button>Start</button>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const cwd = join(dir, 'failing-replay');
+  await mkdir(join(cwd, 'demos'), {recursive: true});
+  const planPath = join(cwd, 'demos', 'checkout.json');
+  await writeFile(planPath, JSON.stringify({url: `http://127.0.0.1:${server.address().port}/`, viewport: {width: 640, height: 480},
+    steps: [{action: 'click', target: {role: 'button', name: 'Start'}}, {action: 'click', target: {role: 'button', name: 'Pay now'}, timeout: 1500}]}));
+  try {
+    const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless'],
+      {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    const [code] = await once(child, 'close');
+    assert.notEqual(code, 0);
+    assert.match(output, /2\/2 {2}click the button “Pay now”/);
+    assert.match(output, /Step 2 of 2 failed: click the button “Pay now”\n {2}Couldn't find the button “Pay now” on the page within 2 seconds\./);
+    assert.match(output, /edit step 2 in demos\/checkout\.json/);
+    assert.doesNotMatch(output, /\n\s+at .*\.m?js:\d+/, 'No stack trace for a problem the person can fix');
+    assert.match(output, /Saved what was recorded before the problem: recordings\/checkout-replay-incomplete\.mp4/);
+    assert.ok((await readFile(join(cwd, 'recordings', 'checkout-replay-incomplete.mp4'))).length > 1000);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('command-line mistakes get one plain sentence, not a stack trace', () => {
+  const script = join(root, 'tools/recorder/record.mjs');
+  const missing = spawnSync(process.execPath, [script, 'replay', join(dir, 'nope.json')], {encoding: 'utf8'});
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /There is no replay plan at .*nope\.json/);
+  assert.doesNotMatch(missing.stderr, /\n\s+at /);
+  const ftp = spawnSync(process.execPath, [script, 'ftp://example.com'], {encoding: 'utf8'});
+  assert.match(ftp.stderr, /http or https website address/);
+  const word = spawnSync(process.execPath, [script, 'hn'], {encoding: 'utf8'});
+  assert.match(word.stderr, /"hn" isn't a complete website address/);
+  assert.doesNotMatch(ftp.stderr, /\n\s+at /);
 });

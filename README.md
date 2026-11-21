@@ -26,7 +26,7 @@ All options require Node.js and Chrome. The skill also requires a compatible Cop
 The rest of the first-time guide below uses the VS Code extension.
 
 **The shortcut is Control+Shift+9:** press it once to start and again to stop. On a Mac, use
-**Control**, not Command. It only works while the website in Chrome has focus; if nothing happens,
+**Control**, not Command. It works while the recorded tab in Chrome has focus; if nothing happens,
 click in the Stand-in terminal in VS Code and press **Enter** instead (once to start, once to stop).
 
 ## 1. Set up once
@@ -58,14 +58,15 @@ That's it. You do not need to install additional recorder packages or use a term
 1. Open a folder in VS Code where you'd like to save your video. Alternatively, Stand-in will ask you to
    choose one.
 2. Open the Command Palette again and select **Stand-in: Record Website**.
-3. Enter the complete website address, for example `https://www.wikipedia.org`, and press Enter. If asked,
-   choose a folder for the files.
+3. Enter the website address, for example `wikipedia.org`, and press Enter. If asked, choose a folder for
+   the files.
 4. When Chrome opens, get the page ready. You can sign in before recording if you want to show a signed-in
    page. Complete any sign-in or security checks yourself.
-5. Click inside the website, then press **Control+Shift+9**. Wait until the VS Code terminal says
-   **Recording this tab**. Now perform your demo.
-6. With the website focused, press **Control+Shift+9** again. Wait until the terminal reports both
-   **Saved** and **Saved replay plan**. Do not close the recorded tab before saving.
+5. Press **Control+Shift+9**. Wait until the VS Code terminal says **Recording this tab**. Now perform
+   your demo.
+6. Press **Control+Shift+9** again. Chrome closes, and after a few seconds VS Code says
+   **Your video is ready**. Choose **Open Video** to watch it. Do not close the recorded tab before
+   stopping.
 
 If the shortcut does nothing (usually because Chrome isn't focused), click in the Stand-in terminal and
 press **Enter** to start, then **Enter** again to stop. Chrome comes to the front when you do.
@@ -74,10 +75,17 @@ If you don't see the terminal, select **View > Terminal** in VS Code.
 
 ## 3. Find and review your video
 
-In the folder you opened or chose, look in **recordings** for the new `.mp4` file. Open it in your
-usual video player and watch it before sharing. The terminal also shows its full location.
+Choose **Open Video** or **Show in Folder** in the "Your video is ready" message. The video is in
+**recordings** in the folder you opened or chose, named after the site and the time you recorded it, for
+example `wikipedia.org-2026-11-21-14-05.mp4`. Watch it before sharing.
 
-Stand-in also saves a `.json` file in **demos**. You can ignore it if you're happy with the video; it's
+The video is a standard H.264 MP4 that plays in QuickTime (including on Intel Macs), Windows Media
+Player, PowerPoint, Teams, Slack and video editors. Chrome records in AV1, so Stand-in converts it using
+Chrome itself; you don't need to install anything. This takes a few seconds, about a quarter of the
+video's length on a typical laptop. If the conversion isn't possible, the terminal says so and keeps the
+AV1 video, which plays in Chrome, Edge, VLC and newer Macs.
+
+Stand-in also saves a `.json` file with the same name in **demos**. You can ignore it if you're happy with the video; it's
 there if you want to [replay or add effects](#optional-replay-or-add-effects) later.
 
 **Before sharing:** Stand-in records everything visible in the recorded tab, including account details
@@ -107,7 +115,17 @@ original exactly.
 3. Replay can make real changes on a website. If the terminal asks for confirmation, type **y** and press
    Enter only if you approve running those actions. Recordings made by Stand-in use a saved browser session
    and therefore require this confirmation even if you were signed out.
-4. Wait for the new video path in the terminal, then review the video before sharing.
+4. Each step is listed in the terminal as it runs. When it finishes, VS Code says **Your video is ready**.
+   The replay video is named after the plan, for example `wikipedia.org-2026-11-21-14-05-replay.mp4`.
+   Review it before sharing.
+
+If a step can't be done, for example because the page changed, the replay stops and tells you which step
+failed and why, in plain words. The video up to that point is saved with `-incomplete` in its name. Edit
+that step in the JSON file (its `target`, a longer `timeout`, or `"optional": true` to skip it when it's
+missing) and replay again. Add `--rehearse` on the command line to try the steps without recording.
+
+Clicks that close a pop-up, cookie notice or banner are saved as optional steps, because sites often
+remember that you closed them and don't show them again on replay.
 
 Your saved session may expire. If it does, make a new recording and sign in before starting. Some websites
 may not allow a session to be reused. Actions performed while preparing the original page are not in the
@@ -146,11 +164,13 @@ commands from a Stand-in source checkout:
 
 ```sh
 npm ci --prefix tools/recorder
-node tools/recorder/record.mjs https://www.wikipedia.org
+node tools/recorder/record.mjs wikipedia.org
 ```
 
-Prepare the page, then use **Control+Shift+9** to start and stop. Wait for the terminal to report
-the saved video and plan; they are placed in `recordings/` and `demos/` under the current folder.
+Prepare the page, then use **Control+Shift+9** (or Enter in the terminal) to start and stop. Wait for
+**Your video is ready**; the video and plan are placed in `recordings/` and `demos/` under the current
+folder. Add `--av1` to keep Chrome's original AV1 video and skip the conversion, or `--debug` to see
+technical details when something goes wrong.
 To replay a reviewed plan, run:
 
 ```sh

@@ -49,7 +49,8 @@ async function createSkillDirectory(destination) {
     if (!expected || installed.version !== expected.version) {
       throw new Error(`Installed ${name} does not match the recorder lockfile; run npm install in the repository.`);
     }
-    if (Object.keys(installed.dependencies ?? {}).length) {
+    // Type-definition packages are only for editors; the recorder never loads them.
+    if (Object.keys(installed.dependencies ?? {}).some(dep => !dep.startsWith('@types/'))) {
       throw new Error(`${name} has additional dependencies; update skill packaging before distributing it.`);
     }
     await cp(source, path.join(targetRecorder, 'node_modules', name), {recursive: true});

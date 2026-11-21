@@ -30,6 +30,15 @@ Targets can be CSS strings or objects such as `{"role":"button","name":"Save"}`,
 `{"testId":"save"}`, or `{"css":"#save"}`. Use `frame` for an iframe selector (an array for nested
 iframes), `within` for a containing target, and `nth` for a zero-based match.
 
+A `name` matches part of the element's name, ignoring case, and an exact match wins when there are
+several. Numbers in a name match any number, so `"English 7,261,000+ articles"` still works when the
+count changes. With `nth`, the whole name must match. CSS and role targets also find elements inside
+web components (open shadow DOM).
+
+Recording picks the most readable target it can: a label, placeholder or role and name, then a unique
+test id, then a form `name`, then CSS. When several elements share a role and name (such as "Read
+more" on every card), it adds `nth`.
+
 ## Actions
 
 | Action | Fields |
@@ -39,7 +48,7 @@ iframes), `within` for a containing target, and `nth` for a zero-based match.
 | `press` | `key`, e.g. `Enter` |
 | `scroll` | `by`, `pages`, `to`, or `target`; optional `duration` |
 | `drag` | `target`, `to`, optional `duration` |
-| `select` | `target`, `value` or `label` |
+| `select` | `target`, `label` and/or `value` (tries `label`, then `value`) |
 | `check`, `uncheck`, `hover` | `target`; `hover` also accepts `ms` |
 | `move` | `x`, `y`, optional `duration` |
 | `wait` | `ms` |
@@ -50,7 +59,9 @@ iframes), `within` for a containing target, and `nth` for a zero-based match.
 | `goto` | `url` |
 | `evaluate` | `js` (runs JavaScript on the site; review carefully) |
 
-Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Password input is not captured;
+Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Optional steps that can't be done are
+skipped with a note in the terminal. Recording marks clicks that close a pop-up, cookie notice or banner
+as `"optional": true, "timeout": 3000`, since sites often don't show them again. Password input is not captured;
 replace `SET-ME` placeholders only after reviewing the plan and the sensitivity of the value. Captured
 actions are approximate: review selectors, waits, navigation and session state before replay. The
 [JSON schema](../tools/recorder/plan.schema.json) provides editor completion.

@@ -59,14 +59,18 @@ are required. Do not write custom browser scripts or edit recorder internals whe
    does nothing, they can press Enter in the recorder's terminal instead, once to start and once to stop
    (only when the command runs in an interactive terminal they can type into). Wait for the
    command to finish; do not sign in, solve MFA, or bypass site protections for them.
-3. Report the saved MP4 and JSON paths from the terminal. The video captures everything visible in the
+3. Report the MP4 path from **Your video is ready** and the JSON path from **Saved the replay plan**. The
+   MP4 is converted to H.264 so it plays everywhere; if the terminal says it kept the AV1 video, pass that
+   on. The video captures everything visible in the
    tab; plans and the saved browser session may also contain sensitive information. Advise review before
    sharing, and use of video editing software for cleanup.
 4. If asked to replay, review the plan with the person first. Use
    `node "<absolute recorder path>" replay <plan.json>` to produce a new video; rehearse with
    `--rehearse` only if requested or needed. Before each replay or rehearsal using a saved session,
    get explicit approval and only then pass `--confirm-signed-in`. Plans may be edited with captions or
-   highlights; see the linked plan reference. Replays revisit the site and may fail if its state has changed.
+   highlights; see the linked plan reference. Replays revisit the site and may fail if its state has changed. A failed
+   replay names the failing step and the reason; fix that step (target, `timeout`, or `"optional": true`)
+   rather than retrying blindly. The partial video is saved with `-incomplete` in its name.
 
 For either workflow, the video captures everything visible in the tab; plans and browser sessions may
 also contain sensitive information. Advise review before sharing and use of video editing software for

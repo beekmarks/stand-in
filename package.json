@@ -52,6 +52,7 @@
   },
   "dependencies": {
     "chrome-capture": "0.1.2",
+    "mediabunny": "1.65.2",
     "playwright-core": "1.65.1"
   },
   "devDependencies": {

@@ -35,7 +35,10 @@ by the website.
 
 Click inside the recorded website tab and press **Control+Shift+9**. On a Mac, use **Control**, not
 Command. Check the VS Code terminal for the current status: wait for **Recording this tab** before you
-start your demo. Press the shortcut again and wait for both saved-file messages before closing the tab.
+start your demo. Press the shortcut again and wait for **Your video is ready**.
+
+Only the tab Stand-in opened is recorded. If the site opened another tab, the terminal says so; the
+shortcut doesn't work there. Switch back to the original tab (or close the new one) first.
 If an embedded part of the page doesn't respond to the shortcut, click the main page and try again.
 
 If the shortcut still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code
@@ -44,12 +47,21 @@ and press **Enter** to start (Chrome comes to the front), then click back in the
 
 ## I can't find my video or plan
 
-Open **View > Terminal** in VS Code and look for the full paths after **Saved** and **Saved replay plan**.
+Choose **Show in Folder** in the "Your video is ready" message. Or open **View > Terminal** in VS Code and
+look for the paths after **Saved the replay plan** and **Your video is ready**.
 They're normally in the **recordings** and **demos** folders inside the workspace folder or the folder
 you chose. If the terminal reports an error, don't assume both files were saved: a video may have been
 saved even if the plan could not be saved.
 
 Closing the recorded tab before stopping loses the video. Start a new recording if this happened.
+
+## The video won't play
+
+Stand-in saves standard H.264 MP4 videos, which play almost everywhere. If the terminal said it **kept
+the original AV1 video**, it couldn't convert this one (for example, a Chrome without an H.264 encoder).
+AV1 plays in Chrome, Edge, Firefox, VLC and Macs with Apple silicon M3 or newer, but not in QuickTime on
+Intel Macs or some editors. Drag the file into a Chrome window to watch it, or convert it with a tool such
+as HandBrake.
 
 ## Replay asks for confirmation or fails
 
@@ -58,8 +70,11 @@ real data. Review the JSON plan, then type **y** and press Enter in the terminal
 Stand-in recordings use a saved browser session, so confirmation is required even for a signed-out
 recording.
 
-If a page, selector, or signed-in session has changed, replay may fail. Sign in during a new recording
-if the session expired, or edit the plan if you are comfortable doing so. Some preparation done before
+If a page, selector, or signed-in session has changed, replay may fail. The terminal says which step
+failed and why, and saves the video up to that point with `-incomplete` in its name. Sign in during a new
+recording if the session expired, or edit that step in the plan: change its `target`, give it a longer
+`timeout`, or add `"optional": true` so replay skips it when it is missing. To check the steps quickly
+without making a video, run the replay from the command line with `--rehearse`. Some preparation done before
 the original recording may also need to be repeated. Your original MP4 is not modified by replay.
 
 ## I recorded sensitive information

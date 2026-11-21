@@ -77,13 +77,12 @@ These steps use the extension. For the skill, ask Copilot as described above.
 1. In VS Code, open the folder where you want to save the video. If you don't open one, Stand-in will
    ask you to choose a folder.
 2. Open the Command Palette and choose **Stand-in: Record Website**.
-3. Enter a website address, such as `https://www.wikipedia.org`, and press Enter. Choose a folder if
-   prompted.
+3. Enter a website address, such as `wikipedia.org`, and press Enter. Choose a folder if prompted.
 4. When Chrome opens, get the page ready. If your demo needs you to sign in, you can do that now.
-5. Click inside the website and press **Control+Shift+9**. On a Mac, use **Control**, not Command.
+5. Press **Control+Shift+9**. On a Mac, use **Control**, not Command.
 6. Wait until the VS Code terminal says **Recording this tab**. Then do the actions you want in your demo.
-7. Click inside the website and press **Control+Shift+9** again. Wait until the terminal shows both
-   **Saved** and **Saved replay plan** before closing the tab.
+7. Press **Control+Shift+9** again. Chrome closes; a few seconds later VS Code says **Your video is
+   ready**. Choose **Open Video** to watch it.
 
 If the shortcut does nothing, click in the Stand-in terminal and press **Enter** instead: once to start,
 once to stop.
@@ -92,8 +91,10 @@ To see the terminal, choose **View > Terminal** in VS Code.
 
 ## Find your video
 
-Open the folder you chose and look inside **recordings** for the new `.mp4` file. The terminal also
-shows its full location. Open the video in your usual video player and watch it before sharing.
+Choose **Show in Folder** in the "Your video is ready" message, or look inside **recordings** in the
+folder you chose. Videos are named after the site and the time, such as
+`wikipedia.org-2026-11-21-14-05.mp4`, and are standard H.264 MP4 files that play in QuickTime, Windows
+Media Player, PowerPoint and Teams. Watch the video before sharing.
 
 There will also be a `.json` file in the **demos** folder. You can ignore it unless you want to replay
 the demo or add effects later.

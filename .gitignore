@@ -2,6 +2,8 @@
 .runs/
 recordings/**/*.mp4
 demos/*-????-??-??T*.json
+# Recordings save plans as <site>-YYYY-MM-DD-HH-MM[-N].json; they can contain typed text.
+demos/*-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9]*.json
 node_modules/
 /dist/
 *.vsix
