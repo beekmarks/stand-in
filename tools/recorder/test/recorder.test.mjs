@@ -8,7 +8,7 @@ import {join, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {chromium} from 'playwright-core';
 import {findChromeBinary, startRecording} from 'chrome-capture';
-import {findChrome, liveCapture, liveRecording, requireSupportedNode} from '../record.mjs';
+import {findChrome, liveCapture, liveRecording, requireSupportedNode, StepBuilder} from '../record.mjs';
 
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 let browser, dir;
@@ -136,6 +136,28 @@ test('live instructions return if recording fails to start', async () => {
     await page.keyboard.press('Control+Shift+Digit9');
     await done;
   } finally { await ctx.close(); }
+});
+
+test('recording can be started and stopped without the page shortcut', async () => {
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  const file = join(dir, 'live-terminal.html'), videoPath = join(dir, 'live-terminal.mp4');
+  try {
+    await writeFile(file, '<body style="background:green"><p>Terminal control</p></body>');
+    const {done, toggle, state} = await liveRecording({ctx, page, videoPath, startRecording,
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto(pathToFileURL(file).href);
+    await page.locator('stand-in-live-help').waitFor();
+    assert.equal(await toggle(), 'recording');
+    assert.equal(state(), 'recording');
+    assert.equal(await page.locator('stand-in-live-help').count(), 0);
+    await page.waitForTimeout(1000);
+    assert.equal(await toggle(), 'saved');
+    await done;
+    assert.ok((await readFile(videoPath)).length > 1000);
+  } finally {
+    await ctx.close();
+  }
 });
 
 test('closing a live tab before stopping reports that no video was saved', async () => {
@@ -411,4 +433,43 @@ test('captured passwords are replaced by placeholders', async () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /uncaptured password/);
   } finally { await ctx.close(); }
+});
+
+test('pauses after a submitted question become waits for the answer', () => {
+  const box = {placeholder: 'Ask a question'}, link = {role: 'link', name: 'Next'};
+  const build = (events, endGap = 1000) => {
+    const b = new StepBuilder();
+    let t = 1000;
+    for (const [dt, ev] of events) {
+      t += dt;
+      b.add({...ev, t}, null);
+    }
+    return b.finish(t + endGap);
+  };
+  const ask = [[0, {kind: 'input', target: box, value: 'How do I open an account?'}], [300, {kind: 'enter', target: box}],
+    [5, {kind: 'input', target: box, value: 'How do I open an account?\n'}]];
+  // Enter, then a 9 s pause, then a click: the pause follows the answer.
+  let steps = build([...ask, [9000, {kind: 'click', target: link}]]);
+  assert.deepEqual(steps.map(s => s.action), ['type', 'waitForStable', 'click']);
+  assert.deepEqual(steps[1].around, box);
+  assert.equal(steps[1].minMs, 3000);
+  assert.equal(steps.filter(s => s.action === 'type').length, 1);
+  // A Send button after typing works the same way.
+  steps = build([[0, {kind: 'input', target: box, value: 'Hi'}], [400, {kind: 'click', target: {role: 'button', name: 'Send'}}],
+    [6000, {kind: 'click', target: link}]]);
+  assert.deepEqual(steps.map(s => s.action), ['type', 'click', 'waitForStable', 'click']);
+  // If the page navigated after submitting (a search, a form), keep a fixed wait.
+  const b = new StepBuilder();
+  b.add({kind: 'input', target: box, value: 'shoes', t: 1000}, null);
+  b.add({kind: 'enter', target: box, t: 1300}, null);
+  b.noteNavigation(1800);
+  b.add({kind: 'click', target: link, t: 7300}, null);
+  assert.deepEqual(b.finish(8000).map(s => s.action), ['type', 'wait', 'click']);
+  // Signing in is not a question.
+  steps = build([[0, {kind: 'input', target: {label: 'Password'}, value: '', secret: true}],
+    [300, {kind: 'enter', target: {label: 'Password'}}], [6000, {kind: 'click', target: link}]]);
+  assert.deepEqual(steps.map(s => s.action), ['type', 'wait', 'click']);
+  // A pause at the end of the recording after a question also waits for the answer.
+  steps = build(ask, 8000);
+  assert.equal(steps.at(-1).action, 'waitForStable');
 });

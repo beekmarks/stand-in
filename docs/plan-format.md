@@ -44,7 +44,7 @@ iframes), `within` for a containing target, and `nth` for a zero-based match.
 | `move` | `x`, `y`, optional `duration` |
 | `wait` | `ms` |
 | `waitFor` | `target`, `url`, or load `state` |
-| `waitForStable` | `target` or `around`, optional `quietMs`, `maxMs` |
+| `waitForStable` | `target` or `around`, optional `quietMs`, `maxMs`, `minMs`, `changeMs` |
 | `caption` | `text`; use `null` to hide |
 | `highlight` | `target`, optional `ms` |
 | `goto` | `url` |
@@ -54,3 +54,23 @@ Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Password inpu
 replace `SET-ME` placeholders only after reviewing the plan and the sensitivity of the value. Captured
 actions are approximate: review selectors, waits, navigation and session state before replay. The
 [JSON schema](../tools/recorder/plan.schema.json) provides editor completion.
+
+### Waiting for chat answers
+
+When you submit a question in a text field (press Enter, or click a button such as Send right after
+typing) and then wait for the answer, the captured plan gets a `waitForStable` step whose `around` is the
+question box, so replay waits for the answer however long it takes. If the page went to a new address
+after you submitted, as with a search, the pause stays a fixed `wait`. Other pauses are fixed `wait`
+steps too. In a hand-written plan, the step looks like this:
+
+```json
+{"action": "type", "target": {"placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},
+{"action": "waitForStable", "around": {"placeholder": "Ask a question"}, "pauseAfter": 3000}
+```
+
+It waits for the answer near the box to start appearing (up to `changeMs`, default 20000), then until it
+has stopped changing for `quietMs` (default 2000) with no visible loading or typing indicator. `minMs`
+sets a minimum wait for assistants that pause before answering; captured plans set it to about half the
+time you waited. `pauseAfter` gives viewers time to read.
+If no answer starts, or it never settles within `maxMs` (default 90000), the replay stops with an error
+rather than recording an incomplete answer.

@@ -33,7 +33,9 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 3. Use documented actions and user-facing targets such as `role`/`name`, `label` or `placeholder`.
    Include the requested input and submission, and waits for results the person wants shown. Use
    `waitForStable` when content streams or loads asynchronously; don't claim it proves the content is
-   correct. Add captions or highlights only if requested. Do not invent credentials or put them in a plan.
+   correct. For a chat answer, use `{"action": "waitForStable", "around": <the question box's target>}`
+   after the submitting step: it finds and follows the answer near the box (see "Waiting for chat answers"
+   in the plan reference). Add captions or highlights only if requested. Do not invent credentials or put them in a plan.
 4. Record directly with `node "<absolute recorder path>" replay <plan.json>`. This runs the actions in
    Chrome and saves a new MP4; no manual capture or rehearsal is needed for a straightforward request.
    The command reports the output path. Use `--rehearse` only if requested or needed to resolve a failure;
@@ -53,7 +55,9 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 1. Use the **Stand-in: Record Website** command, or run `node "<absolute recorder path>" <url>` in the
    chosen output folder.
 2. The person prepares the page and signs in if needed. Tell them to focus the page and press
-   **Ctrl+Shift+9** to start, then again to stop and save (Control, not Command, on Mac). Wait for the
+   **Ctrl+Shift+9** to start, then again to stop and save (Control, not Command, on Mac). If the shortcut
+   does nothing, they can press Enter in the recorder's terminal instead, once to start and once to stop
+   (only when the command runs in an interactive terminal they can type into). Wait for the
    command to finish; do not sign in, solve MFA, or bypass site protections for them.
 3. Report the saved MP4 and JSON paths from the terminal. The video captures everything visible in the
    tab; plans and the saved browser session may also contain sensitive information. Advise review before

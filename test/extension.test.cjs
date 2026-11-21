@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const {createCommands} = require('../extension.cjs');
 
 function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '/work space'}}],
-  input = 'https://example.com', selections = [], active} = {}) {
-  const tasks = [];
+  input = 'https://example.com', selections = [], active, nodeProblem = null, errorChoice} = {}) {
+  const tasks = [], errors = [], opened = [];
   const vscode = {
     workspace: {workspaceFolders: folders},
     window: {
@@ -19,7 +19,10 @@ function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '
       },
       showOpenDialog: async () => selections.shift(),
       showQuickPick: async choices => choices[0],
+      showErrorMessage: async (message, ...items) => { errors.push({message, items}); return errorChoice; },
     },
+    env: {openExternal: async uri => opened.push(uri)},
+    Uri: {parse: value => value},
     TaskScope: {Global: 1},
     TaskRevealKind: {Always: 1},
     TaskPanelKind: {Dedicated: 2},
@@ -33,7 +36,7 @@ function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '
     },
     tasks: {executeTask: async task => tasks.push(task)},
   };
-  return {commands: createCommands(vscode, '/extension path'), tasks};
+  return {commands: createCommands(vscode, '/extension path', {nodeCheck: () => nodeProblem}), tasks, errors, opened};
 }
 
 test('record command launches the bundled recorder in the selected workspace', async () => {
@@ -75,4 +78,23 @@ test('a multi-folder workspace asks which folder should receive the recording', 
   const {commands, tasks} = fixture({folders});
   await commands.record();
   assert.equal(tasks[0].execution.options.cwd, '/first');
+});
+
+test('a missing or old Node.js is reported before anything starts', async () => {
+  const {commands, tasks, errors, opened} = fixture({nodeProblem: 'Stand-in needs Node.js 24.11 or newer.',
+    errorChoice: 'Download Node.js'});
+  await commands.record();
+  assert.equal(tasks.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /24\.11/);
+  assert.deepEqual(errors[0].items, ['Download Node.js']);
+  assert.deepEqual(opened, ['https://nodejs.org/en/download']);
+});
+
+test('the Node.js check accepts the running version only when it is new enough', () => {
+  const {checkNode} = require('../extension.cjs');
+  const result = checkNode();
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major > 24 || (major === 24 && minor >= 11)) assert.equal(result, null);
+  else assert.match(result, /24\.11/);
 });

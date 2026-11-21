@@ -1,8 +1,23 @@
 'use strict';
 
 const path = require('node:path');
+const {spawnSync} = require('node:child_process');
 
-function createCommands(vscode, extensionPath) {
+const NODE_DOWNLOAD = 'https://nodejs.org/en/download';
+
+// Returns null when a supported Node.js (24.11+) is on the PATH, otherwise a message for the person.
+function checkNode() {
+  const result = spawnSync('node', ['--version'], {encoding: 'utf8', timeout: 5000, shell: process.platform === 'win32'});
+  const match = /v(\d+)\.(\d+)/.exec(result.stdout ?? '');
+  if (result.error || !match)
+    return 'Stand-in needs Node.js 24.11 or newer, and VS Code could not find Node.js. Install it, then fully quit and reopen VS Code.';
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  if (major < 24 || (major === 24 && minor < 11))
+    return `Stand-in needs Node.js 24.11 or newer, but VS Code found ${result.stdout.trim()}. Install a newer version, then fully quit and reopen VS Code.`;
+  return null;
+}
+
+function createCommands(vscode, extensionPath, {nodeCheck = checkNode} = {}) {
   const recorder = path.join(extensionPath, 'tools', 'recorder', 'record.mjs');
 
   async function outputFolder() {
@@ -22,6 +37,14 @@ function createCommands(vscode, extensionPath) {
       openLabel: 'Save recordings here',
     });
     return selected?.[0]?.fsPath;
+  }
+
+  async function nodeReady() {
+    const problem = nodeCheck();
+    if (!problem) return true;
+    const choice = await vscode.window.showErrorMessage(problem, 'Download Node.js');
+    if (choice === 'Download Node.js') await vscode.env.openExternal(vscode.Uri.parse(NODE_DOWNLOAD));
+    return false;
   }
 
   async function run(args, cwd, name) {
@@ -48,6 +71,7 @@ function createCommands(vscode, extensionPath) {
         },
       });
       if (!url) return;
+      if (!(await nodeReady())) return;
       const cwd = await outputFolder();
       if (!cwd) return;
       await run([url], cwd, 'Record website');
@@ -60,6 +84,7 @@ function createCommands(vscode, extensionPath) {
         ...(active?.scheme === 'file' && active.fsPath.endsWith('.json') ? {defaultUri: active} : {}),
       });
       if (!selected?.[0]) return;
+      if (!(await nodeReady())) return;
       const cwd = await outputFolder();
       if (!cwd) return;
       await run(['replay', selected[0].fsPath], cwd, 'Replay plan');
@@ -78,4 +103,4 @@ function activate(context) {
   }
 }
 
-module.exports = {activate, createCommands};
+module.exports = {activate, createCommands, checkNode};

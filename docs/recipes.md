@@ -38,6 +38,10 @@ Command. Check the VS Code terminal for the current status: wait for **Recording
 start your demo. Press the shortcut again and wait for both saved-file messages before closing the tab.
 If an embedded part of the page doesn't respond to the shortcut, click the main page and try again.
 
+If the shortcut still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code
+and press **Enter** to start (Chrome comes to the front), then click back in the terminal and press
+**Enter** again to stop and save.
+
 ## I can't find my video or plan
 
 Open **View > Terminal** in VS Code and look for the full paths after **Saved** and **Saved replay plan**.

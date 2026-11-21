@@ -1,7 +1,15 @@
 # Stand-in
 
-Make a video of a website. Open the site, do your demo, and stop recording. Stand-in saves an MP4
-video and an optional editable replay plan.
+Record a website demo with one shortcut, then **replay it later as a polished video**. Press
+Control+Shift+9, do your demo, and press it again: Stand-in saves an MP4 and an editable replay plan
+of what you did. Replay that plan whenever you need the video again, after the site changes or with
+captions, highlights and a smooth cursor added, and it waits for streamed AI assistant answers to
+finish before moving on.
+
+![A replay of the bundled sample plan: a caption, a highlighted link, a question typed into a chat assistant, and the replay waiting for the streamed answer](docs/demo.gif)
+
+*A replay of the bundled sample plan, [`demos/sample/assistant-tour.json`](demos/sample/assistant-tour.json),
+on a fictional website (shown at 1.5× speed).*
 
 ## Choose how to use Stand-in
 
@@ -18,7 +26,8 @@ All options require Node.js and Chrome. The skill also requires a compatible Cop
 The rest of the first-time guide below uses the VS Code extension.
 
 **The shortcut is Control+Shift+9:** press it once to start and again to stop. On a Mac, use
-**Control**, not Command.
+**Control**, not Command. It only works while the website in Chrome has focus; if nothing happens,
+click in the Stand-in terminal in VS Code and press **Enter** instead (once to start, once to stop).
 
 ## 1. Set up once
 
@@ -57,6 +66,9 @@ That's it. You do not need to install additional recorder packages or use a term
    **Recording this tab**. Now perform your demo.
 6. With the website focused, press **Control+Shift+9** again. Wait until the terminal reports both
    **Saved** and **Saved replay plan**. Do not close the recorded tab before saving.
+
+If the shortcut does nothing (usually because Chrome isn't focused), click in the Stand-in terminal and
+press **Enter** to start, then **Enter** again to stop. Chrome comes to the front when you do.
 
 If you don't see the terminal, select **View > Terminal** in VS Code.
 
@@ -101,6 +113,18 @@ Your saved session may expire. If it does, make a new recording and sign in befo
 may not allow a session to be reused. Actions performed while preparing the original page are not in the
 plan.
 
+**Demoing a chat assistant?** Ask your question, press Enter or click Send, and wait for the whole answer
+before doing anything else. The plan then waits for the answer on replay, however long it takes, instead
+of for a fixed time; it rides out "thinking" pauses and ignores changes elsewhere on the page. See
+[Waiting for chat answers](docs/plan-format.md#waiting-for-chat-answers).
+
+### Try the sample replay
+
+The repository includes a sample plan for a fictional website, so you can try replay without recording
+anything or signing in. Download the repository (**Code > Download ZIP** on GitHub) and unzip it. In
+VS Code, choose **Stand-in: Replay Plan** and select `demos/sample/assistant-tour.json`. The new video
+appears in **recordings** in the folder you chose.
+
 ## Optional: ask an assistant
 
 If you use GitHub Copilot in VS Code, you can ask an assistant to make the demo for you. For example:
@@ -134,6 +158,17 @@ node tools/recorder/record.mjs replay demos/your-plan.json
 ```
 
 Replay can change real data and may ask for confirmation, as described above.
+
+## Related projects
+
+Stand-in builds on Chrome's native tab recorder through Paul Irish's
+[chrome-capture](https://github.com/paulirish/chrome-capture), with browser control from Playwright.
+Other tools cover similar ground and may suit you better:
+[Chrome DevTools Recorder](https://developer.chrome.com/docs/devtools/recorder) and Playwright `codegen`
+also turn clicks into replayable steps; [RunThru](https://github.com/marktolson/runthru) and
+[humanjs](https://github.com/totigm/humanjs) capture flows by demonstration; and
+[webreel](https://webreel.dev/) and Playwright's screencast API produce polished scripted videos.
+Screen recorders such as Loom are simpler when you only need one take and never plan to re-record.
 
 ## Need help?
 

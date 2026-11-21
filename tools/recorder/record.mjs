@@ -338,7 +338,10 @@ function captureInit() {
 class StepBuilder {
   constructor() {
     this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; this.lastSubmit = null;
+    this.navT = 0;
   }
+  // The recorded tab's main page changed URL at time t (full load or single-page-app route change).
+  noteNavigation(t) { this.navT = t; }
   same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   flush() {
     if (!this.typing) return;
@@ -351,11 +354,25 @@ class StepBuilder {
     this.steps.push(step);
     this.typing = null;
   }
+  // A pause longer than 2.5 s becomes a wait. After a question is submitted in a text field (Enter, or a
+  // click right after typing, such as Send) and the page stays put, the pause was almost certainly an
+  // answer appearing, as in a chat assistant. Then the wait follows the answer around that field instead
+  // of lasting a fixed time, so a slower answer on replay isn't cut off. `minMs` (about half your pause,
+  // allowing for reading time) rides out "thinking" pauses where nothing on screen changes.
   gap(t) {
     const g = this.lastT ? t - this.lastT : 0;
     const prev = this.steps.at(-1);
-    if (g > 2500 && prev && prev.action !== 'wait')
-      this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 30000)});
+    if (!(g > 2500 && prev && prev.action !== 'wait' && prev.action !== 'waitForStable')) return;
+    const before = this.steps.at(-2);
+    const field = prev.action === 'type' && prev.submit ? prev.target
+      : ['click', 'press'].includes(prev.action) && before?.action === 'type' && !before.submit ? before.target : null;
+    const typed = String((prev.action === 'type' ? prev : before)?.text ?? '');
+    const navigated = this.navT >= this.lastT && this.navT <= t;
+    if (field && !navigated && !typed.startsWith('SET-ME')) {
+      const minMs = Math.max(0, Math.min(15000, Math.round((g - 3000) * 0.5 / 100) * 100));
+      this.steps.push({action: 'waitForStable', around: field, ...(minMs ? {minMs} : {}), pauseAfter: 2500,
+        note: `captured: you waited ${(g / 1000).toFixed(1)}s for an answer here`});
+    } else this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 30000)});
   }
   // Chat boxes often fire one more input event right after Enter (the newline, or the box being cleared).
   // That is part of submitting, not new typing; recording it would ask the question a second time.
@@ -916,6 +933,7 @@ function liveShortcutInit() {
       dismiss.addEventListener('click', window.__standInHideLiveHelp);
       panel.append(title, document.createElement('br'), 'Sign in first if needed. With this page focused, press ',
         shortcut, ' to start. Wait for the terminal to say recording, then press it again to stop and save. ' +
+        'If the shortcut does nothing, press Enter in the terminal instead. ' +
         'Everything visible in this tab is recorded. On Mac, use Control, not Command. ' +
         'This message disappears before recording.', document.createElement('br'), dismiss);
       root.append(panel);
@@ -945,11 +963,8 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording, captur
     : 'The recorded tab closed before the recording could be saved; press Ctrl+Shift+9 before closing it.')));
   ctx.once('close', () => rejectDone(new Error('Chrome closed before the recording was saved.')));
   await ctx.exposeBinding('__standInLiveState', ({page: source}) => source === page ? state : 'unavailable');
-  await ctx.exposeBinding('__standInLiveToggle', async ({page: source}) => {
-    if (source !== page) {
-      log('Focus the recorded tab to control recording.');
-      throw new Error('Focus the recorded tab to control recording.');
-    }
+  // One state machine for both controls: the shortcut in the page and Enter in the terminal.
+  const toggle = async () => {
     if (state === 'ready') {
       state = 'starting';
       try {
@@ -971,7 +986,7 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording, captur
         throw error;
       }
       state = 'recording';
-      log('Recording this tab. Press Ctrl+Shift+9 again to stop and save.');
+      log(`Recording this tab. Press Ctrl+Shift+9 again to stop and save${process.stdin.isTTY ? ' (or press Enter in this terminal)' : ''}.`);
       return state;
     }
     if (state !== 'recording') {
@@ -995,9 +1010,29 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording, captur
       rejectDone(error);
       throw error;
     }
+  };
+  await ctx.exposeBinding('__standInLiveToggle', async ({page: source}) => {
+    if (source !== page) {
+      log('Focus the recorded tab to control recording.');
+      throw new Error('Focus the recorded tab to control recording.');
+    }
+    return toggle();
   });
   await ctx.addInitScript(liveShortcutInit);
-  return {done};
+  return {done, toggle, state: () => state};
+}
+
+// Lets people start and stop from the terminal (press Enter) when the page shortcut doesn't reach Chrome,
+// for example because the page isn't focused. Only used when the terminal is interactive.
+function terminalControl({page, toggle}) {
+  if (!process.stdin.isTTY) return {close() {}};
+  const rl = createInterface({input: process.stdin});
+  rl.on('line', () => {
+    page.bringToFront()
+      .then(toggle)
+      .catch(error => log(`Could not change recording: ${error.message}`));
+  });
+  return {close() { rl.close(); }};
 }
 
 async function liveCapture({ctx, page, plan, planPath, profileDir}) {
@@ -1011,6 +1046,7 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
     });
   });
   await ctx.addInitScript(captureInit);
+  page.on('framenavigated', frame => { if (armed && frame === page.mainFrame()) builder.noteNavigation(Date.now()); });
   return {
     arm(url) { startUrl = url; armed = true; },
     disarm() { armed = false; },
@@ -1051,7 +1087,7 @@ async function quickMain() {
   stand-in replay <plan.json> [--rehearse]    Replay the plan, optionally without recording
 
 Options: --chrome PATH, --output VIDEO.mp4, --confirm-signed-in
-Press Ctrl+Shift+9 in the page to start and stop recording.`);
+Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in the terminal.`);
     return;
   }
   requireSupportedNode(process.versions.node);
@@ -1128,12 +1164,14 @@ Press Ctrl+Shift+9 in the page to start and stop recording.`);
     await ctx.addInitScript(overlayInit, plan.overlay);
     if (!replay) {
       const capture = await liveCapture({ctx, page, plan, planPath, profileDir: plan.profileDir});
-      const {done} = await liveRecording({ctx, page, plan, videoPath, startRecording, capture});
+      const {done, toggle} = await liveRecording({ctx, page, plan, videoPath, startRecording, capture});
       page.on('dialog', d => log(`Browser ${d.type()} dialog: respond in Chrome.`));
       await page.goto(plan.url, {waitUntil: 'domcontentloaded', timeout: 45000});
+      const terminal = terminalControl({page, toggle});
       log('Sign in if needed. Press Ctrl+Shift+9 in the page to start, then again to stop and save.');
+      if (process.stdin.isTTY) log('If the shortcut does nothing, click in this terminal and press Enter instead (once to start, once to stop).');
       log('The video captures this tab. The video, replay plan and saved browser session may contain sensitive information.');
-      await done;
+      try { await done; } finally { terminal.close(); }
       return;
     }
     if (plan.zoom && plan.zoom !== 1)

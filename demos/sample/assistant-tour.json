@@ -1,0 +1,16 @@
+{
+  "description": "Sample replay plan for the bundled fictional Harbor Financial site. Replay it to see captions, a highlight and a wait for a streamed assistant answer. No sign-in or real website involved.",
+  "url": "../../examples/sample-site/home.html",
+  "zoom": 1.5,
+  "pace": "relaxed",
+  "steps": [
+    {"action": "caption", "text": "Meet the Harbor Assistant"},
+    {"action": "highlight", "target": {"role": "link", "name": "Harbor Assistant"}, "ms": 1400},
+    {"action": "click", "target": {"role": "link", "name": "Harbor Assistant"}},
+    {"action": "caption", "text": "Ask a question"},
+    {"action": "type", "target": {"frame": "#panel", "placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},
+    {"action": "caption", "text": "Replay waits for the whole answer"},
+    {"action": "waitForStable", "around": {"frame": "#panel", "placeholder": "Ask a question"}, "pauseAfter": 3000},
+    {"action": "caption", "text": null}
+  ]
+}

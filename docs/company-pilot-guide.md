@@ -85,6 +85,9 @@ These steps use the extension. For the skill, ask Copilot as described above.
 7. Click inside the website and press **Control+Shift+9** again. Wait until the terminal shows both
    **Saved** and **Saved replay plan** before closing the tab.
 
+If the shortcut does nothing, click in the Stand-in terminal and press **Enter** instead: once to start,
+once to stop.
+
 To see the terminal, choose **View > Terminal** in VS Code.
 
 ## Find your video
@@ -129,5 +132,6 @@ setup. You'll still need to sign in yourself and approve any signed-in replay.
 
 ## Need help?
 
-If a command isn't available or the shortcut doesn't work, contact the person who gave you Stand-in.
+If the shortcut doesn't work, press **Enter** in the Stand-in terminal to start and stop instead. If a
+command isn't available or recording still won't start, contact the person who gave you Stand-in.
 If VS Code reports an older Node version, fully quit and reopen it after installing Node.js.
