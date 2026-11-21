@@ -1,0 +1,59 @@
+{
+  "name": "stand-in",
+  "displayName": "Stand-in",
+  "description": "Quick website demo recordings with editable replay plans.",
+  "version": "0.1.0",
+  "publisher": "beekmarks",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beekmarks/stand-in.git"
+  },
+  "engines": {
+    "vscode": "^1.109.0",
+    "node": ">=24.11.0"
+  },
+  "categories": ["Other"],
+  "main": "./extension.cjs",
+  "extensionKind": ["workspace"],
+  "contributes": {
+    "taskDefinitions": [
+      {
+        "type": "stand-in",
+        "required": ["action"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Stand-in recording or replay task."
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "standIn.record",
+        "title": "Stand-in: Record Website"
+      },
+      {
+        "command": "standIn.replay",
+        "title": "Stand-in: Replay Plan"
+      }
+    ],
+    "chatSkills": [
+      {
+        "path": "./.github/skills/stand-in/SKILL.md"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "chrome-capture": "0.1.2",
+    "playwright-core": "1.65.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.6.2"
+  }
+}

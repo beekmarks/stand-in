@@ -1,8 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Stand-in plan",
-  "description": "A demo plan or shared site profile for Stand-in. See docs/plan-format.md.",
+  "description": "An editable Stand-in replay plan. See docs/plan-format.md.",
   "type": "object",
+  "required": ["url", "steps"],
   "additionalProperties": false,
   "definitions": {
     "target": {
@@ -216,7 +217,7 @@
         },
         "around": {
           "$ref": "#/definitions/target",
-          "description": "waitForStable: the text field a question was just typed into. Waits for the answer that appears around it (for example in a chat panel) to start and then stop changing. Capture adds this automatically."
+          "description": "waitForStable: the text field a question was just typed into. Waits for the answer that appears around it (for example in a chat panel) to start and then stop changing."
         },
         "quietMs": {
           "type": "number",
@@ -226,9 +227,13 @@
           "type": "number",
           "description": "waitForStable with `around`: how long to wait for the answer to start appearing (default 20000)."
         },
+        "requireChange": {
+          "type": "boolean",
+          "description": "waitForStable with `around`: fail if no response starts or it does not settle (default true; false permits a warning)."
+        },
         "minMs": {
           "type": "number",
-          "description": "waitForStable with `around`: never finish sooner than this, to ride out pauses while the assistant is 'thinking'. Capture sets it from how long you waited."
+          "description": "waitForStable with `around`: never finish sooner than this, to ride out pauses while the assistant is 'thinking'."
         },
         "maxMs": {
           "type": "number",
@@ -262,7 +267,7 @@
         },
         "note": {
           "type": "string",
-          "description": "Free text shown in logs/report: which part of the request this implements."
+          "description": "Free text describing which part of the request this step implements."
         }
       }
     }
@@ -271,17 +276,13 @@
     "$schema": {
       "type": "string"
     },
-    "extends": {
-      "type": "string",
-      "description": "Site profile to inherit from (relative path). setup/redact/hide are concatenated."
-    },
     "description": {
       "type": "string",
       "description": "The one-line feature description this demo implements."
     },
     "notes": {
       "type": "string",
-      "description": "What inspect found about the page (selectors, frames), for future plans."
+      "description": "Notes about the demo."
     },
     "url": {
       "type": "string",
@@ -293,13 +294,6 @@
         "$ref": "#/definitions/step"
       },
       "description": "Recorded actions."
-    },
-    "setup": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/step"
-      },
-      "description": "Actions run before recording (login, dismiss banners)."
     },
     "viewport": {
       "type": "object",
@@ -338,63 +332,16 @@
     "accent": {
       "type": "string"
     },
-    "colorScheme": {
-      "enum": [
-        "light",
-        "dark"
-      ]
-    },
-    "locale": {
-      "type": "string"
-    },
     "constantFrameRate": {
       "type": "boolean"
     },
     "profileDir": {
       "type": "string",
-      "description": "Signed-in browser session folder (e.g. ../.sessions/my-site), created by `record.mjs login --site <name>-signed-in`."
+      "description": "Browser session folder, relative to this plan. Replays using it require approval."
     },
-    "connect": {
-      "type": "string",
-      "description": "CDP endpoint of a running Chrome, e.g. http://127.0.0.1:9222."
-    },
-    "storageState": {
-      "type": "string"
-    },
-    "redact": {
-      "type": "array",
-      "description": "CSS selectors to blur in every frame.",
-      "items": {
-        "oneOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "selector": {
-                "type": "string"
-              },
-              "style": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "selector"
-            ]
-          }
-        ]
-      }
-    },
-    "hide": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "CSS selectors to make invisible."
-    },
-    "blurPx": {
-      "type": "number"
+    "signedIn": {
+      "type": "boolean",
+      "description": "Declare a signed-in plan so replay requires approval."
     },
     "leadInMs": {
       "type": "number"
@@ -405,31 +352,11 @@
     "timeout": {
       "type": "number"
     },
-    "headful": {
-      "type": "boolean"
-    },
     "chrome": {
-      "type": "string"
-    },
-    "chromeArgs": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "ignoreHTTPSErrors": {
-      "type": "boolean",
-      "description": "For test/staging environments that use internal certificates."
-    },
-    "output": {
       "type": "string"
     },
     "overlay": {
       "type": "object"
-    },
-    "loginUrl": {
-      "type": "string",
-      "description": "Signed-in site profiles: page `record.mjs login --site \u2026` opens for the one-time manual sign-in (defaults to url)."
     }
   }
 }

@@ -1,0 +1,414 @@
+import {after, before, test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn, spawnSync} from 'node:child_process';
+import {once} from 'node:events';
+import {mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
+import {createServer} from 'node:http';
+import {join, resolve} from 'node:path';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {chromium} from 'playwright-core';
+import {findChromeBinary, startRecording} from 'chrome-capture';
+import {findChrome, liveCapture, liveRecording, requireSupportedNode} from '../record.mjs';
+
+const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+let browser, dir;
+before(async () => {
+  await mkdir(join(root, '.runs'), {recursive: true});
+  dir = await mkdtemp(join(root, '.runs', 'recorder-test-'));
+  browser = await chromium.launch({executablePath: await findChrome(process.env.CHROME_PATH, findChromeBinary), headless: true});
+});
+after(async () => {
+  await browser?.close();
+  if (dir) await rm(dir, {recursive: true, force: true});
+});
+
+async function waitForLiveState(page, expected) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (await page.evaluate(() => window.__standInLiveState()) === expected) return;
+    await page.waitForTimeout(20);
+  }
+  assert.fail(`Live recording did not reach state ${expected}`);
+}
+
+test('unsupported Node versions produce actionable guidance', () => {
+  assert.throws(() => requireSupportedNode('24.10.0'), /24\.11 or newer.*24\.10\.0.*reopen VS Code/);
+  assert.throws(() => requireSupportedNode('22.22.0'), /24\.11 or newer/);
+  assert.doesNotThrow(() => requireSupportedNode('24.11.0'));
+  assert.doesNotThrow(() => requireSupportedNode('25.0.0'));
+});
+
+test('live recording saves the actual tab across navigation', async () => {
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  const first = join(dir, 'live-first.html'), second = join(dir, 'live-second.html');
+  const videoPath = join(dir, 'live.mp4');
+  try {
+    await writeFile(first, '<body style="background:red"></body>');
+    await writeFile(second, '<body style="background:blue"></body>');
+    const {done} = await liveRecording({ctx, page, videoPath, startRecording,
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto(pathToFileURL(first).href);
+    const help = page.locator('stand-in-live-help');
+    await help.waitFor();
+    assert.match(await help.locator('div').innerText(), /Ctrl\+Shift\+9.*start[\s\S]*again to stop/);
+    await help.getByRole('button', {name: 'Dismiss'}).click();
+    assert.equal(await help.count(), 0);
+    await page.reload();
+    await help.waitFor();
+    const otherPage = await ctx.newPage();
+    await otherPage.goto('about:blank');
+    assert.equal(await otherPage.evaluate(() => window.__standInLiveState()), 'unavailable');
+    assert.equal(await otherPage.locator('stand-in-live-help').count(), 0);
+    await otherPage.close();
+    await page.bringToFront();
+    const screenshot = await page.screenshot();
+    const helpPixel = await page.evaluate(async data => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width; canvas.height = image.height;
+      const context = canvas.getContext('2d');
+      context.drawImage(image, 0, 0);
+      return [...context.getImageData(Math.floor(canvas.width * 0.2), Math.floor(canvas.height * 0.94), 1, 1).data];
+    }, screenshot.toString('base64'));
+    assert.ok(helpPixel[0] < 60 && helpPixel[1] < 60 && helpPixel[2] < 60, JSON.stringify(helpPixel));
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    assert.equal(await help.count(), 0);
+    await page.waitForTimeout(1200);
+    await page.goto(pathToFileURL(second).href);
+    await page.waitForTimeout(1200);
+    assert.equal(await help.count(), 0);
+    await page.keyboard.press('Control+Shift+Digit9');
+    await done;
+    const video = await readFile(videoPath);
+    assert.ok(video.length > 1000);
+    const pixels = await page.evaluate(async data => {
+      const video = document.createElement('video');
+      video.src = `data:video/mp4;base64,${data}`;
+      await new Promise((resolve, reject) => {
+        video.onloadedmetadata = resolve;
+        video.onerror = () => reject(new Error('Recorded MP4 could not be decoded'));
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      const sample = async time => {
+        video.currentTime = time;
+        await new Promise(resolve => { video.onseeked = resolve; });
+        context.drawImage(video, 0, 0);
+        return [
+          context.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data,
+          context.getImageData(Math.floor(canvas.width * 0.2), Math.floor(canvas.height * 0.94), 1, 1).data,
+        ].map(v => [...v]);
+      };
+      return [await sample(0.05), await sample(0.3), await sample(video.duration - 0.3)];
+    }, video.toString('base64'));
+    for (const pixel of pixels[0]) assert.ok(pixel[0] > 200 && pixel[2] < 40, JSON.stringify(pixels));
+    for (const pixel of pixels[1]) assert.ok(pixel[0] > 200 && pixel[2] < 40, JSON.stringify(pixels));
+    for (const pixel of pixels[2]) assert.ok(pixel[2] > 200 && pixel[0] < 40, JSON.stringify(pixels));
+  } finally { await ctx.close(); }
+});
+test('live instructions return if recording fails to start', async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  let signalFailure;
+  const failed = new Promise(resolve => { signalFailure = resolve; });
+  let attempts = 0;
+  try {
+    const {done} = await liveRecording({ctx, page, videoPath: join(dir, 'retry.mp4'),
+      startRecording: async () => {
+        if (++attempts === 1) { signalFailure(); throw new Error('test start failure'); }
+        return {stop: async () => Buffer.from('video')};
+      },
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto('about:blank');
+    const help = page.locator('stand-in-live-help');
+    await help.waitFor();
+    await page.keyboard.press('Control+Shift+Digit9');
+    await failed;
+    await help.waitFor();
+    assert.match(await help.locator('div').innerText(), /Ctrl\+Shift\+9/);
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await done;
+  } finally { await ctx.close(); }
+});
+
+test('closing a live tab before stopping reports that no video was saved', async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  try {
+    const {done} = await liveRecording({ctx, page, videoPath: join(dir, 'closed.mp4'), startRecording,
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto('about:blank');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await page.close();
+    await assert.rejects(done, /closed before the recording could be saved/);
+  } finally { await ctx.close(); }
+});
+
+test('live shortcut works in focused iframes across navigation', async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const first = join(dir, 'live-frame-first.html'), second = join(dir, 'live-frame-second.html');
+  try {
+    const html = '<iframe srcdoc="<input>"></iframe>';
+    await writeFile(first, html);
+    await writeFile(second, html);
+    const {done} = await liveRecording({ctx, page, videoPath: join(dir, 'frame.mp4'),
+      startRecording: async () => ({stop: async () => Buffer.from('video')}),
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto(pathToFileURL(first).href);
+    const field = page.frameLocator('iframe').locator('input');
+    await field.focus();
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    assert.equal(await field.inputValue(), '');
+    await page.goto(pathToFileURL(second).href);
+    await page.frameLocator('iframe').locator('input').focus();
+    await page.keyboard.press('Control+Shift+Digit9');
+    await done;
+  } finally { await ctx.close(); }
+});
+
+test('the one-command CLI saves both files', {skip: process.platform === 'win32', timeout: 60000}, async () => {
+  const server = createServer((_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<button onclick="this.textContent=\'Clicked\'">Click me</button>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const portServer = createServer();
+  await new Promise(resolve => portServer.listen(0, '127.0.0.1', resolve));
+  const port = portServer.address().port;
+  await new Promise((resolve, reject) => portServer.close(error => error ? reject(error) : resolve()));
+  const cwd = join(dir, 'cli'), wrapper = join(dir, 'test-chrome');
+  await mkdir(cwd);
+  const chrome = await findChrome(process.env.CHROME_PATH, findChromeBinary);
+  const quoted = `'${chrome.replaceAll("'", "'\\''")}'`;
+  await writeFile(wrapper, `#!/bin/sh\nexec ${quoted} --headless=new --remote-debugging-port=${port} "$@"\n`, {mode: 0o755});
+  let child, connected, timer;
+  try {
+    child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), url, '--chrome', wrapper],
+      {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    const ready = new Promise(resolve => {
+      const read = data => {
+        output += data;
+        if (output.includes('Press Ctrl+Shift+9 in the page to start')) resolve();
+      };
+      child.stdout.on('data', read);
+      child.stderr.on('data', read);
+    });
+    const exited = once(child, 'close');
+    await Promise.race([
+      ready,
+      exited.then(([code]) => { throw new Error(`CLI exited before opening the site (${code}): ${output}`); }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`CLI did not become ready: ${output}`)), 20000); }),
+    ]);
+    clearTimeout(timer);
+    connected = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const page = connected.contexts()[0].pages().find(p => p.url() === url);
+    assert.ok(page, 'The recorded page was not opened');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Click me'}).click();
+    await page.waitForTimeout(1000);
+    await page.keyboard.press('Control+Shift+Digit9');
+    const [code] = await exited;
+    assert.equal(code, 0, output);
+    const [videoName] = await readdir(join(cwd, 'recordings'));
+    const [planName] = await readdir(join(cwd, 'demos'));
+    assert.ok((await readFile(join(cwd, 'recordings', videoName))).length > 1000);
+    const plan = JSON.parse(await readFile(join(cwd, 'demos', planName), 'utf8'));
+    assert.equal(plan.url, url);
+    assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Click me'));
+  } finally {
+    clearTimeout(timer);
+    if (child && child.exitCode === null) child.kill();
+    await connected?.close();
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('one capture saves video and replayable actions after signed-in preparation', {timeout: 90000}, async () => {
+  let actionCount = 0;
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Content-Security-Policy',
+      "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; require-trusted-types-for 'script'");
+    if (req.url === '/acted') { actionCount++; res.end('ok'); return; }
+    if (req.url === '/frame') {
+      res.end('<label>Message <input></label><button onclick="fetch(\'/acted\')">Send</button>');
+      return;
+    }
+    if (req.url === '/next') {
+      res.end('<iframe id="demo-frame" src="/frame"></iframe>');
+      return;
+    }
+    res.end(req.headers.cookie?.includes('session=test')
+      ? '<p>Signed in</p><input placeholder="Preparation"><a href="/next">Next</a>'
+      : '<p>Sign in</p>');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const profileDir = join(dir, 'combined-session');
+  try {
+    const ctx = await chromium.launchPersistentContext(profileDir, {
+      executablePath: await findChrome(process.env.CHROME_PATH, findChromeBinary), headless: true,
+      viewport: {width: 640, height: 480},
+    });
+    const page = ctx.pages()[0];
+    const planPath = join(dir, 'combined.json'), videoPath = join(dir, 'combined.mp4');
+    try {
+      const plan = {fps: 30, viewport: {width: 640, height: 480}};
+      const capture = await liveCapture({ctx, page, plan, planPath, profileDir});
+      const {done} = await liveRecording({ctx, page, plan, videoPath, startRecording, capture});
+      await page.goto(`${url}/sign-in`);
+      await ctx.addCookies([{name: 'session', value: 'test', url, expires: Date.now() / 1000 + 300}]);
+      await page.goto(`${url}/start`);
+      await page.getByPlaceholder('Preparation').fill('exclude me');
+      await page.keyboard.press('Control+Shift+Digit9');
+      await waitForLiveState(page, 'recording');
+      await page.getByRole('link', {name: 'Next'}).click();
+      const frame = page.frameLocator('#demo-frame');
+      await frame.getByLabel('Message').fill('hello');
+      await frame.getByRole('button', {name: 'Send'}).click();
+      await page.waitForTimeout(1000);
+      await page.keyboard.press('Control+Shift+Digit9');
+      await done;
+      assert.ok((await readFile(videoPath)).length > 1000);
+      const saved = JSON.parse(await readFile(planPath, 'utf8'));
+      assert.equal(saved.url, `${url}/start`);
+      assert.equal(saved.profileDir, 'combined-session');
+      assert.ok(saved.steps.some(s => s.action === 'click' && s.target?.name === 'Next'));
+      assert.ok(saved.steps.some(s => s.action === 'type' && s.target?.frame === '#demo-frame' && s.text === 'hello' && s.clear));
+      assert.ok(saved.steps.some(s => s.action === 'click' && s.target?.frame === '#demo-frame' && s.target?.name === 'Send'));
+      assert.doesNotMatch(JSON.stringify(saved.steps), /exclude me|Digit9|ControlOrMeta\+9/);
+      saved.steps.unshift(
+        {action: 'caption', text: 'A replay caption'},
+        {action: 'highlight', target: {role: 'link', name: 'Next'}, ms: 1000},
+      );
+      await writeFile(planPath, JSON.stringify(saved));
+    } finally { await ctx.close(); }
+    const script = join(root, 'tools/recorder/record.mjs');
+    const refused = spawnSync(process.execPath, [script, 'replay', planPath, '--headless', '--rehearse'], {encoding: 'utf8'});
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /explicit approval/);
+    const replayVideo = join(dir, 'replayed.mp4');
+    const child = spawn(process.execPath, [script, 'replay', planPath, '--headless', '--confirm-signed-in', '--output', replayVideo],
+      {stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    const [code] = await once(child, 'close');
+    assert.equal(code, 0, output);
+    const video = await readFile(replayVideo);
+    assert.ok(video.length > 1000);
+    const check = await browser.newPage();
+    try {
+      const darkPixels = await check.evaluate(async data => {
+        const video = document.createElement('video');
+        video.src = `data:video/mp4;base64,${data}`;
+        await new Promise((resolve, reject) => {
+          video.onloadedmetadata = resolve;
+          video.onerror = () => reject(new Error('Replay MP4 could not be decoded'));
+        });
+        video.currentTime = 2;
+        await new Promise(resolve => { video.onseeked = resolve; });
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(video, 0, 0);
+        const pixels = context.getImageData(canvas.width * 0.3, canvas.height * 0.85,
+          canvas.width * 0.4, canvas.height * 0.1).data;
+        let dark = 0;
+        for (let i = 0; i < pixels.length; i += 4) if (pixels[i] < 80 && pixels[i + 1] < 80 && pixels[i + 2] < 80) dark++;
+        return dark;
+      }, video.toString('base64'));
+      assert.ok(darkPixels > 200, `Replay caption was not visible (${darkPixels} dark pixels)`);
+    } finally { await check.close(); }
+    assert.equal(actionCount, 2);
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('a plan save failure leaves the video intact and reports failure', async () => {
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'existing-plan.json'), videoPath = join(dir, 'plan-failure.mp4');
+  await writeFile(planPath, 'keep');
+  try {
+    const plan = {fps: 30, viewport: {width: 640, height: 480}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath, capture,
+      startRecording: async () => ({stop: async () => Buffer.from('video')})});
+    await page.goto('about:blank');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await assert.rejects(done, /EEXIST/);
+    assert.equal(await readFile(videoPath, 'utf8'), 'video');
+    assert.equal(await readFile(planPath, 'utf8'), 'keep');
+  } finally { await ctx.close(); }
+});
+
+test('the CLI refuses to overwrite an existing video', async () => {
+  const output = join(dir, 'existing.mp4');
+  await writeFile(output, 'keep');
+  const result = spawnSync(process.execPath, [join(root, 'tools/recorder/record.mjs'),
+    'https://example.com', '--output', output], {encoding: 'utf8', cwd: dir});
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /already exists/);
+  assert.equal(await readFile(output, 'utf8'), 'keep');
+});
+
+test('the installed symlink runs the CLI', async () => {
+  const link = join(dir, 'stand-in');
+  await symlink(join(root, 'tools/recorder/record.mjs'), link);
+  const result = spawnSync(process.execPath, [link, '--help'], {encoding: 'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /stand-in <https:\/\/website>/);
+});
+
+test('obsolete plans are rejected without changing their files', async () => {
+  const planPath = join(dir, 'old-plan.json');
+  const original = JSON.stringify({extends: 'old-site.json', steps: []});
+  await writeFile(planPath, original);
+  const result = spawnSync(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath], {encoding: 'utf8'});
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must contain a URL|Unsupported plan fields/);
+  assert.equal(await readFile(planPath, 'utf8'), original);
+});
+
+test('captured passwords are replaced by placeholders', async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'password-plan.json');
+  try {
+    const pagePath = join(dir, 'password.html');
+    await writeFile(pagePath, '<label>Password <input type="password"></label>');
+    const plan = {fps: 30, viewport: {width: 640, height: 480}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'password-video.mp4'), capture,
+      startRecording: async () => ({stop: async () => Buffer.from('video')})});
+    await page.goto(pathToFileURL(pagePath).href);
+    await page.keyboard.press('Control+Shift+Digit9');
+    await waitForLiveState(page, 'recording');
+    await page.getByLabel('Password').fill('secret-password');
+    await page.keyboard.press('Control+Shift+Digit9');
+    await done;
+    const contents = await readFile(planPath, 'utf8');
+    assert.doesNotMatch(contents, /secret-password/);
+    assert.match(contents, /SET-ME: password/);
+    const result = spawnSync(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath], {encoding: 'utf8'});
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /uncaptured password/);
+  } finally { await ctx.close(); }
+});

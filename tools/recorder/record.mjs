@@ -1,50 +1,22 @@
 #!/usr/bin/env node
-// stand-in: drive a simulated user through a page and record it with Chrome's native
-// MP4 tab recorder (CDP Page.startScreenRecording, Chrome 153+) via the `chrome-capture` library.
-//
-//   node record.mjs inspect <url> [--out DIR] [--plan plan.json]   list interactive elements + screenshot
-//   node record.mjs <plan.json> --rehearse [--out DIR]             run the plan without recording, screenshot each step
-//   node record.mjs <plan.json> [--out DIR] [--output video.mp4]   record it
-//
-// Common flags: --chrome PATH, --headful.  Plan format: see ../../docs/plan-format.md
+// Capture a website tab and optionally replay its recorded actions with visual effects.
 
 import {spawnSync} from 'node:child_process';
-import {existsSync, readdirSync, readFileSync} from 'node:fs';
-import {mkdir, readFile, rm, stat, writeFile} from 'node:fs/promises';
-import {createRequire} from 'node:module';
+import {existsSync, readdirSync, realpathSync} from 'node:fs';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {homedir, platform} from 'node:os';
-import {dirname, join, relative, resolve} from 'node:path';
+import {basename, dirname, join, relative, resolve} from 'node:path';
+import {createInterface} from 'node:readline/promises';
 import {parseArgs} from 'node:util';
 import {pathToFileURL} from 'node:url';
 
 const MIN_CHROME = 153;
 
 // ------------------------------------------------------------------------------------------
-// Dependencies: installed once into a cache dir, so the skill folder itself can stay read-only.
+// Dependencies are installed with the package.
 // ------------------------------------------------------------------------------------------
 async function loadDeps() {
-  // 1) Installed next to this script (`npm ci` in tools/recorder: pinned by package-lock.json).
-  try {
-    const local = createRequire(import.meta.url);
-    const load = async name => import(pathToFileURL(local.resolve(name)).href);
-    const [pw, cc] = await Promise.all([load('playwright-core'), load('chrome-capture')]);
-    return {chromium: pw.chromium ?? pw.default.chromium, startRecording: cc.startRecording, findChromeBinary: cc.findChromeBinary};
-  } catch {}
-  // 2) Otherwise a per-user cache, installed on first run.
-  const home = process.env.STAND_IN_HOME ?? join(homedir(), '.cache', 'stand-in');
-  const pkgs = {'chrome-capture': '^0.1.2', 'playwright-core': '^1.63.0'};
-  const have = Object.keys(pkgs).every(p => existsSync(join(home, 'node_modules', p, 'package.json')));
-  if (!have) {
-    log(`Installing ${Object.keys(pkgs).join(' + ')} into ${home} (one-time)…`);
-    await mkdir(home, {recursive: true});
-    if (!existsSync(join(home, 'package.json'))) await writeFile(join(home, 'package.json'), '{"private":true}\n');
-    const r = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--prefix', home,
-      ...Object.entries(pkgs).map(([n, v]) => `${n}@${v}`)], {stdio: 'inherit', shell: platform() === 'win32'});
-    if (r.status !== 0) die('npm install failed. Check network access to registry.npmjs.org.');
-  }
-  const req = createRequire(join(home, 'package.json'));
-  const load = async name => import(pathToFileURL(req.resolve(name)).href);
-  const [pw, cc] = await Promise.all([load('playwright-core'), load('chrome-capture')]);
+  const [pw, cc] = await Promise.all([import('playwright-core'), import('chrome-capture')]);
   return {chromium: pw.chromium ?? pw.default.chromium, startRecording: cc.startRecording, findChromeBinary: cc.findChromeBinary};
 }
 
@@ -155,8 +127,6 @@ function overlayInit(opts) {
     .hl { position: fixed; border-radius: 10px; box-shadow: 0 0 0 4px ${opts.accent}, 0 0 0 9999px rgba(0,0,0,.28);
       opacity: 0; transition: opacity .3s; }
     .hl.on { opacity: 1; }
-    .badge { position: fixed; left: 14px; bottom: 14px; padding: 7px 12px; border-radius: 999px; background: #b91c1c; color: #fff;
-      font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.3); }
     /* Keep-alive: Chrome's capturer only emits a frame when something repaints, so a static page gives a
        variable-frame-rate file. A 2px compositor animation at ~1% opacity forces a steady 60fps. */
     .ka { position: fixed; right: 0; bottom: 0; width: 2px; height: 2px; background: #808080;
@@ -167,9 +137,29 @@ function overlayInit(opts) {
     if (!document.documentElement) return false;
     const host = document.createElement('demo-overlay');
     root = host.attachShadow({mode: 'open'});
-    root.innerHTML = `<style>${css}</style><div class="cap"></div>` + (opts.keepAlive ? '<div class="ka"></div>' : '') + (opts.cursor ?
-      `<svg class="cur" viewBox="0 0 24 24"><path d="M3 2 L3 19.5 L7.9 15 L11.3 22.4 L14.6 20.9 L11.2 13.6 L18 13.6 Z"
-        fill="${opts.cursorColor}" stroke="${opts.cursorStroke}" stroke-width="1.5" stroke-linejoin="round"/></svg>` : '');
+    const style = document.createElement('style');
+    style.textContent = css;
+    caption = document.createElement('div');
+    caption.className = 'cap';
+    root.append(style, caption);
+    if (opts.keepAlive) {
+      const keepAlive = document.createElement('div');
+      keepAlive.className = 'ka';
+      root.append(keepAlive);
+    }
+    if (opts.cursor) {
+      cursor = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      cursor.setAttribute('class', 'cur');
+      cursor.setAttribute('viewBox', '0 0 24 24');
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      shape.setAttribute('d', 'M3 2 L3 19.5 L7.9 15 L11.3 22.4 L14.6 20.9 L11.2 13.6 L18 13.6 Z');
+      shape.setAttribute('fill', opts.cursorColor);
+      shape.setAttribute('stroke', opts.cursorStroke);
+      shape.setAttribute('stroke-width', '1.5');
+      shape.setAttribute('stroke-linejoin', 'round');
+      cursor.append(shape);
+      root.append(cursor);
+    }
     cursor = root.querySelector('.cur'); caption = root.querySelector('.cap');
     // Render in the top layer (as a manual popover) so modal <dialog>s and popovers can't cover the cursor.
     host.setAttribute('popover', 'manual');
@@ -223,12 +213,6 @@ function overlayInit(opts) {
     .observe(document, {childList: true, subtree: false});
   document.addEventListener('DOMContentLoaded', ensure);
   window.__demoOverlay = {
-    badge(text) {
-      if (!ensure()) return;
-      let b = root.querySelector('.badge');
-      if (!b) { b = document.createElement('div'); b.className = 'badge'; root.append(b); }
-      b.textContent = text;
-    },
     caption(text) {
       if (!ensure()) return;
       if (text) { caption.textContent = text; caption.classList.add('on'); } else caption.classList.remove('on');
@@ -244,84 +228,11 @@ function overlayInit(opts) {
   ensure();
 }
 
-// Redaction / hiding, injected into every frame before page scripts run, so sensitive values are never
-// rendered unblurred, not even for a frame.
-function maskInit({redact, hide, blurPx}) {
-  const rules = [];
-  for (const r of redact) {
-    const sel = typeof r === 'string' ? r : r.selector;
-    const style = typeof r === 'string' ? `filter: blur(${blurPx}px) !important;` : (r.style ?? `filter: blur(${blurPx}px) !important;`);
-    rules.push(`${sel} { ${style} }`);
-  }
-  for (const sel of hide) rules.push(`${sel} { visibility: hidden !important; }`);
-  if (!rules.length) return;
-  const css = rules.join('\n');
-  const apply = () => {
-    if (!document.documentElement) return;
-    let s = document.getElementById('__stand_in_mask');
-    if (!s) { s = document.createElement('style'); s.id = '__stand_in_mask'; s.textContent = css; }
-    if (!s.isConnected) (document.head ?? document.documentElement).append(s);
-  };
-  apply();
-  document.addEventListener('DOMContentLoaded', apply);
-  new MutationObserver(apply).observe(document, {childList: true, subtree: true});
-}
-
-// ------------------------------------------------------------------------------------------
-// Element inventory used by `inspect` and on step failure.
-// ------------------------------------------------------------------------------------------
-function collectElements() {
-  const sel = 'a[href],button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=link],[role=tab],' +
-    '[role=menuitem],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=searchbox],' +
-    '[role=textbox],[contenteditable=""],[contenteditable=true],[onclick],[tabindex]:not([tabindex="-1"])';
-  const roleOf = el => el.getAttribute('role') ?? ({A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
-    SUMMARY: 'button'}[el.tagName] ?? (el.tagName === 'INPUT' ? ({checkbox: 'checkbox', radio: 'radio', submit: 'button',
-    button: 'button', search: 'searchbox', range: 'slider'}[el.type] ?? 'textbox') : el.tagName.toLowerCase()));
-  const nameOf = el => {
-    const lb = el.getAttribute('aria-labelledby');
-    const t = el.getAttribute('aria-label') ?? (lb && document.getElementById(lb)?.textContent) ??
-      (el.labels?.[0]?.textContent) ?? (el.tagName === 'INPUT' && ['submit', 'button'].includes(el.type) ? el.value : null) ??
-      el.innerText ?? el.getAttribute('placeholder') ?? el.getAttribute('title') ?? el.getAttribute('alt') ?? '';
-    return t.replace(/\s+/g, ' ').trim().slice(0, 80);
-  };
-  const out = [];
-  const found = new Set(document.querySelectorAll(sel));
-  // Custom widgets (cards, rows, tiles) are often plain divs: catch them by cursor style or draggable.
-  let scanned = 0;
-  for (const el of document.body?.querySelectorAll('*') ?? []) {
-    if (++scanned > 4000) break;
-    if (found.has(el) || el.closest('demo-overlay')) continue;
-    const c = getComputedStyle(el).cursor;
-    if ((['pointer', 'grab', 'move'].includes(c) || el.draggable) && !(el.parentElement && getComputedStyle(el.parentElement).cursor === c))
-      found.add(el);
-  }
-  for (const el of found) {
-    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
-    if (r.width < 2 || r.height < 2 || cs.visibility === 'hidden' || cs.display === 'none') continue;
-    const role = roleOf(el), name = nameOf(el);
-    const item = {role, name, tag: el.tagName.toLowerCase()};
-    if (el.id) item.css = `#${CSS.escape(el.id)}`;
-    else if (el.getAttribute('data-testid')) item.css = `[data-testid="${el.getAttribute('data-testid')}"]`;
-    else if (el.name) item.css = `${el.tagName.toLowerCase()}[name="${el.name}"]`;
-    if (el.placeholder) item.placeholder = el.placeholder;
-    if (el.href) item.href = el.href.slice(0, 120);
-    item.box = [r.x, r.y, r.width, r.height].map(Math.round);
-    item.inViewport = r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
-    out.push(item);
-  }
-  const headings = [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(Boolean).slice(0, 25);
-  return {title: document.title, url: location.href, scrollHeight: document.documentElement.scrollHeight,
-    viewport: [innerWidth, innerHeight], headings, elements: out.slice(0, 250)};
-}
-
-// ------------------------------------------------------------------------------------------
-// Capture by demonstration: runs in every frame while a person performs the flow in a visible
-// browser. Each real (isTrusted) interaction is turned into a user-facing target and sent to Node.
-// ------------------------------------------------------------------------------------------
 function captureInit() {
   if (window.__demoCaptureInstalled) return;
   window.__demoCaptureInstalled = true;
-  const send = ev => { try { window.__demoCaptureEvent?.({...ev, t: Date.now()}); } catch {} };
+  const send = ev => window.__demoCaptureEvent?.({...ev, t: Date.now()})
+    .catch(error => console.error(`Stand-in could not capture an action: ${error.message}`));
   const INTERACTIVE = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=tab],[role=menuitem],' +
     '[role=menuitemcheckbox],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=textbox],' +
     '[role=searchbox],[contenteditable=""],[contenteditable=true]';
@@ -371,7 +282,9 @@ function captureInit() {
   const isText = el => el && (el.tagName === 'TEXTAREA' || el.isContentEditable ||
     (el.tagName === 'INPUT' && !['checkbox', 'radio', 'submit', 'button', 'range', 'file', 'color'].includes(el.type)));
   let down = null;
-  addEventListener('pointerdown', e => { if (e.isTrusted && e.button === 0) down = {x: e.clientX, y: e.clientY, el: e.target}; }, true);
+  addEventListener('pointerdown', e => {
+    if (e.isTrusted && e.button === 0) down = {x: e.clientX, y: e.clientY, el: e.target};
+  }, true);
   addEventListener('pointerup', e => {
     if (!e.isTrusted || !down) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -397,10 +310,12 @@ function captureInit() {
   addEventListener('change', e => {
     if (!e.isTrusted || e.target.tagName !== 'SELECT') return;
     const o = e.target.selectedOptions[0];
-    send({kind: 'select', target: targetFor(e.target), value: e.target.value, label: clean(o?.textContent)});
+    send({kind: 'select', target: targetFor(e.target),
+      value: e.target.value, label: clean(o?.textContent)});
   }, true);
   addEventListener('keydown', e => {
     if (!e.isTrusted || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === 'Digit9') return;
     const mod = (e.ctrlKey || e.metaKey) ? 'ControlOrMeta+' : '';
     const special = ['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp', 'Home', 'End'];
     if (isText(e.target) && !mod && e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab' && !e.key.startsWith('Arrow')) return;
@@ -420,15 +335,15 @@ function captureInit() {
   }, {capture: true, passive: true});
 }
 
-// Turns the raw event stream into plan steps (coalescing typing, scrolls, double-clicks, and adding waits
-// where the person paused to let something load or stream in).
 class StepBuilder {
-  constructor() { this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; this.lastSubmit = null; }
+  constructor() {
+    this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; this.lastSubmit = null;
+  }
   same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   flush() {
     if (!this.typing) return;
     const {target, text, submit, secret} = this.typing;
-    const step = {action: 'type', target, text: secret ? 'SET-ME: password (not captured)' : text};
+    const step = {action: 'type', target, text: secret ? 'SET-ME: password (not captured)' : text, clear: true};
     if (submit) step.submit = true;
     if (secret) this.secrets++;
     const prev = this.steps.at(-1);
@@ -436,29 +351,11 @@ class StepBuilder {
     this.steps.push(step);
     this.typing = null;
   }
-  // A pause after something that triggers loading/streaming becomes a waitForStable.
-  // After a question is submitted (Enter in a text field, or a click right after typing, such as a Send
-  // button), the wait watches the area *around that field* (`around`), so it follows the answer in a chat
-  // panel instead of the whole page. Otherwise it watches the frame's body.
-  gap(t, frame) {
+  gap(t) {
     const g = this.lastT ? t - this.lastT : 0;
     const prev = this.steps.at(-1);
-    if (g > 2500 && prev && !['wait', 'waitForStable', 'scroll'].includes(prev.action)) {
-      const triggers = ['click', 'press', 'select', 'drag'].includes(prev.action) || (prev.action === 'type' && prev.submit);
-      const note = `captured: you paused ${(g / 1000).toFixed(1)}s here`;
-      const before = this.steps.at(-2);
-      const field = prev.action === 'type' && prev.submit ? prev.target
-        : (prev.action === 'click' || prev.action === 'press') && before?.action === 'type' && !before.submit ? before.target : null;
-      const f = prev.target?.frame ?? frame;
-      // minMs: replies take roughly as long each time, so don't call it done before about half of the time
-      // it took while you demonstrated (minus the time you then spent reading). Covers "thinking" pauses
-      // where nothing on screen changes.
-      const minMs = Math.max(0, Math.min(15000, Math.round((g - 3000) * 0.5 / 100) * 100));
-      if (field && !String(prev.text ?? before?.text ?? '').startsWith('SET-ME'))
-        this.steps.push({action: 'waitForStable', around: field, ...(minMs ? {minMs} : {}), pauseAfter: 2500, note});
-      else if (triggers) this.steps.push({action: 'waitForStable', target: f ? {frame: f, css: 'body'} : {css: 'body'}, pauseAfter: 2500, note});
-      else this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 3000)});
-    }
+    if (g > 2500 && prev && prev.action !== 'wait')
+      this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 30000)});
   }
   // Chat boxes often fire one more input event right after Enter (the newline, or the box being cleared).
   // That is part of submitting, not new typing; recording it would ask the question a second time.
@@ -519,71 +416,15 @@ class StepBuilder {
   }
   snapshot() {
     const steps = this.steps.map(x => ({...x}));
-    if (this.typing) steps.push({action: 'type', target: this.typing.target, text: this.typing.secret ? 'SET-ME: password (not captured)' : this.typing.text});
+    if (this.typing) steps.push({action: 'type', target: this.typing.target, text: this.typing.secret ? 'SET-ME: password (not captured)' : this.typing.text, clear: true});
     return steps;
   }
   finish(t) { this.flush(); this.gap(t, null); this.steps = this.steps.filter(s => !(s.action === 'scroll' && Math.abs(s.by) < 20)); return this.steps; }
 }
 
-// Plain-text view of what's on screen (main page + visible iframes), so a person or an AI agent can verify a
-// step without looking at images.
-// Values shown inside `redact`ed elements (all frames), so text outputs can mask them like the video blurs them.
-async function secretsOf(page, redact) {
-  const sels = (redact ?? []).map(r => typeof r === 'string' ? r : r.selector).filter(Boolean);
-  if (!sels.length) return [];
-  const out = new Set();
-  for (const f of page.frames()) {
-    const vals = await f.evaluate(sels => sels.flatMap(sel => { try { return [...document.querySelectorAll(sel)]; } catch { return []; } })
-      .flatMap(e => [e.innerText, e.textContent]).map(t => (t ?? '').trim()).filter(t => t.length >= 2), sels).catch(() => []);
-    vals.forEach(v => out.add(v));
-  }
-  return [...out].sort((a, b) => b.length - a.length);
-}
-const maskText = (text, secrets) => secrets.reduce((t, v) => t.split(v).join('[redacted]'), text);
-
-async function pageText(page, redact) {
-  return maskText(await rawPageText(page), await secretsOf(page, redact));
-}
-
-async function rawPageText(page) {
-  const grab = () => {
-    const t = (document.body?.innerText ?? '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    return {title: document.title, url: location.href, text: t.length > 20000 ? t.slice(0, 20000) + '\n…(truncated)' : t};
-  };
-  const main = await page.evaluate(grab).catch(() => null);
-  let out = main ? `URL: ${main.url}\nTITLE: ${main.title}\n\n${main.text}\n` : '';
-  for (const f of page.frames()) {
-    if (f === page.mainFrame()) continue;
-    const el = await f.frameElement().catch(() => null);
-    if (!el || !(await el.isVisible().catch(() => false))) continue;
-    const sub = await f.evaluate(grab).catch(() => null);
-    const sel = await el.evaluate(n => n.id ? '#' + n.id : n.getAttribute('title') ? `iframe[title="${n.getAttribute('title')}"]` : 'iframe').catch(() => 'iframe');
-    if (sub) out += `\n===== IFRAME ${sel} (${sub.url}) =====\n${sub.text}\n`;
-  }
-  return out;
-}
-
-// Page inventory, including visible iframes (embedded widgets such as an assistant panel).
-async function inventory(page) {
-  const inv = await page.evaluate(collectElements);
-  inv.frames = [];
-  for (const f of page.frames()) {
-    if (f === page.mainFrame()) continue;
-    const el = await f.frameElement().catch(() => null);
-    if (!el || !(await el.isVisible().catch(() => false))) continue;
-    const frameSelector = await el.evaluate(n => n.id ? `#${CSS.escape(n.id)}` : n.getAttribute('name') ? `iframe[name="${n.getAttribute('name')}"]`
-      : n.getAttribute('title') ? `iframe[title="${n.getAttribute('title')}"]` : n.getAttribute('src') ? `iframe[src="${n.getAttribute('src')}"]` : 'iframe');
-    const sub = await f.evaluate(collectElements).catch(() => null);
-    if (sub) inv.frames.push({frameSelector, url: f.url(), title: sub.title, elements: sub.elements});
-  }
-  return inv;
-}
-
-// ------------------------------------------------------------------------------------------
-// Human-ish input
-// ------------------------------------------------------------------------------------------
 const PACE = {relaxed: 1.35, normal: 1, brisk: 0.7};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+class AssistantResponseError extends Error {}
 
 class Actor {
   constructor(page, plan) {
@@ -813,6 +654,21 @@ class Actor {
   async waitAround(step, timeout) {
     const field = this.locator(step.around).last();
     await field.waitFor({state: 'attached', timeout});
+    const checkFailure = async () => {
+      if (step.requireChange === false) return;
+      const expired = await field.evaluate(el => {
+        let container = el.closest('form,[role="dialog"],[role="log"]') ?? el.parentElement;
+        if (!container) return false;
+        if (container === el.parentElement) {
+          for (let i = 0; i < 4 && container.parentElement && container.parentElement !== document.body; i++)
+            container = container.parentElement;
+        }
+        return [...container.querySelectorAll('*')].some(n =>
+          n.children.length === 0 && /^session expired\.?\s*(?:please )?refresh (?:the |this )?page\.?$/i.test((n.innerText ?? '').trim()));
+      });
+      if (expired) throw new AssistantResponseError('Assistant reported an expired session; refresh and retry.');
+    };
+    await checkFailure();
     const sigs = () => field.evaluate(el => {
       const busyIn = c => {
         if (c.closest('[aria-busy="true"]')) return true;
@@ -861,6 +717,7 @@ class Actor {
     // 1) Wait for the reply to start.
     while (depth < 0) {
       await sleep(150);
+      await checkFailure();
       const d = deepestChange(await sigs().catch(() => null));
       if (d >= 1 || (d === 0 && performance.now() - t0 > 5000)) depth = d;
       if (depth < 0 && performance.now() - t0 > changeMs) {
@@ -872,6 +729,7 @@ class Actor {
     // 2-3) Wait for it to settle.
     let last = '', since = performance.now(), busySeen = false;
     for (;;) {
+      await checkFailure();
       const now = await sigs().catch(() => null);
       const d = deepestChange(now);
       if (d > depth) { depth = d; last = ''; } // the reply showed up deeper than the first change: follow it
@@ -948,11 +806,17 @@ class Actor {
         }
         break;
       }
-      case 'caption': await p.evaluate(t => window.__demoOverlay?.caption(t), step.text ?? null); break;
+      case 'caption': await p.evaluate(t => {
+        if (!window.__demoOverlay) throw new Error('Replay overlay is unavailable.');
+        window.__demoOverlay.caption(t);
+      }, step.text ?? null); break;
       case 'highlight': {
         const {box} = await this.acquire(step.target, timeout);
         const ms = step.ms ?? 1400;
-        await p.evaluate(([b, ms]) => window.__demoOverlay?.highlight(b, ms), [box, ms]);
+        await p.evaluate(([b, ms]) => {
+          if (!window.__demoOverlay) throw new Error('Replay overlay is unavailable.');
+          window.__demoOverlay.highlight(b, ms);
+        }, [box, ms]);
         await p.waitForTimeout(ms * 0.7);
         break;
       }
@@ -974,514 +838,351 @@ class Actor {
   }
 }
 
-const describe = s => {
-  const t = s.target ?? s.to;
-  const tt = t == null ? '' : typeof t === 'string' ? t : JSON.stringify(t);
-  return s.note ?? [s.action, tt, s.text != null ? JSON.stringify(s.text) : '', s.key ?? '', s.url ?? ''].filter(Boolean).join(' ');
-};
-
 // ------------------------------------------------------------------------------------------
 // Main
 // ------------------------------------------------------------------------------------------
 function log(...a) { console.error('[stand-in]', ...a); }
 function die(msg) { console.error(`[stand-in] ERROR: ${msg}`); process.exit(1); }
-const has = bin => spawnSync(bin, ['-version'], {stdio: 'ignore'}).status === 0;
-
-// Plans can `extends` a shared profile (site defaults, login setup, redaction). Setup steps and
-// redact/hide lists are concatenated (profile first); everything else in the child plan wins.
-const PATH_KEYS = ['profileDir', 'storageState', 'output'];
-async function loadPlan(file, seen = new Set()) {
+async function loadPlan(file) {
   const abs = resolve(file);
-  if (seen.has(abs)) die(`"extends" cycle at ${abs}`);
-  seen.add(abs);
   let raw;
   try { raw = JSON.parse(await readFile(abs, 'utf8')); } catch (e) { die(`Cannot read plan ${abs}: ${e.message}`); }
-  for (const k of PATH_KEYS) if (typeof raw[k] === 'string' && !/^[a-z]+:\/\//i.test(raw[k])) raw[k] = resolve(dirname(abs), raw[k].replace(/^~(?=\/)/, homedir()));
-  // A url/loginUrl without a scheme is a local file relative to this JSON (handy for bundled sample sites).
-  for (const k of ['url', 'loginUrl']) if (typeof raw[k] === 'string' && raw[k] && !/^[a-z][a-z0-9+.-]*:/i.test(raw[k]) && !raw[k].startsWith('SET-ME'))
-    raw[k] = pathToFileURL(resolve(dirname(abs), raw[k])).href;
-  if (!raw.extends) return raw;
-  const base = await loadPlan(resolve(dirname(abs), raw.extends), seen);
-  const {extends: _e, ...child} = raw;
-  return {
-    ...base, ...child,
-    viewport: {...base.viewport, ...child.viewport},
-    setup: [...(base.setup ?? []), ...(child.setup ?? [])],
-    redact: [...(base.redact ?? []), ...(child.redact ?? [])],
-    hide: [...(base.hide ?? []), ...(child.hide ?? [])],
-    steps: child.steps ?? [],
-  };
+  if (typeof raw.profileDir === 'string') raw.profileDir = resolve(dirname(abs), raw.profileDir.replace(/^~(?=\/)/, homedir()));
+  if (typeof raw.url === 'string' && !/^[a-z][a-z0-9+.-]*:/i.test(raw.url))
+    raw.url = pathToFileURL(resolve(dirname(abs), raw.url)).href;
+  return raw;
 }
 
 function normalisePlan(raw, urlOverride) {
   const plan = {
     viewport: {width: 1920, height: 1080}, zoom: 1, fps: 60, audio: false, cursor: true, pace: 'normal',
-    leadInMs: 800, tailMs: 1500, timeout: 10000, setup: [], steps: [], redact: [], hide: [], ...raw,
+    leadInMs: 800, tailMs: 1500, timeout: 10000, steps: [], ...raw,
   };
   if (urlOverride) plan.url = urlOverride;
   if (!plan.url) die('Plan has no "url".');
-  if (String(plan.url).startsWith('SET-ME')) die('The site profile still has a "SET-ME" url: open it and put in the real URL.');
+  if (!Array.isArray(plan.steps)) die('Plan "steps" must be an array.');
   plan.viewport = {width: 1920, height: 1080, ...plan.viewport};
   plan.overlay = {cursor: plan.cursor !== false, keepAlive: plan.constantFrameRate !== false, accent: plan.accent ?? '#f5b400', cursorColor: '#ffffff', cursorStroke: '#111111',
     captionSize: Math.round(plan.viewport.height / 1080 * 34), ...(plan.overlay ?? {})};
   return plan;
 }
 
-// Interactive one-time sign-in: opens a visible Chrome on a persistent profile; the person signs in
-// (SSO, MFA, "remember this device"), then closes the window. Later runs reuse the profile headlessly.
-// Creates sites/<name>.json (and, with --signed-in, sites/<name>-signed-in.json that extends it).
-async function initSite(name, url, signedIn) {
-  if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) die('usage: record.mjs init-site <name: lowercase-with-dashes> <url> [--signed-in]');
-  await mkdir('sites', {recursive: true});
-  const base = join('sites', `${name}.json`);
-  const created = [];
-  if (!existsSync(base)) {
-    await writeFile(base, JSON.stringify({
-      url: url ?? 'SET-ME: start page URL',
-      zoom: 1, pace: 'normal', hide: [], setup: [],
-      notes: 'What you have learned about this site (element names, iframes, pop-ups) for future demos.',
-    }, null, 2) + '\n');
-    created.push(base);
-  } else log(`${base} already exists; leaving it as is.`);
-  if (signedIn) {
-    const si = join('sites', `${name}-signed-in.json`);
-    if (!existsSync(si)) {
-      await writeFile(si, JSON.stringify({
-        extends: `${name}.json`,
-        url: 'SET-ME: page to start on once signed in',
-        loginUrl: url ?? 'SET-ME: sign-in page URL',
-        profileDir: `../.sessions/${name}`,
-        redact: [],
-      }, null, 2) + '\n');
-      created.push(si);
-    } else log(`${si} already exists; leaving it as is.`);
-  }
-  for (const f of created) log(`Created ${f}`);
-  if (created.some(f => readFileSync(f, 'utf8').includes('SET-ME'))) log('Open it and replace any "SET-ME" values.');
-  if (signedIn) log(`Then sign in once: record.mjs login --site ${name}-signed-in`);
+function requireSupportedNode(version) {
+  const [major, minor] = version.split('.').map(Number);
+  if (major < 24 || (major === 24 && minor < 11))
+    throw new Error(`Node.js 24.11 or newer is required (found ${version}). Install or select a supported version, then fully quit and reopen VS Code.`);
 }
 
-async function loginFlow(chromium, chromePath, url, profileDir, timeoutMin) {
-  await mkdir(profileDir, {recursive: true});
-  const ctx = await chromium.launchPersistentContext(profileDir, {
-    executablePath: chromePath, headless: false, viewport: null, args: ['--window-size=1440,960'],
-  }).catch(e => die(`Could not open a visible Chrome window (${e.message.split('\n')[0]}). Sign-in needs a desktop session ` +
-    `(it can't run on a headless server), and the session folder must not be open in another Chrome.`));
-  const page = ctx.pages()[0] ?? await ctx.newPage();
-  await page.goto(url).catch(() => {});
-  log(`A Chrome window is open on ${url}.`);
-  log(`Sign in there (complete any MFA and choose "remember this device" if offered), then CLOSE THE WINDOW.`);
-  log(`Profile: ${profileDir}`);
-  await Promise.race([
-    new Promise(r => ctx.on('close', r)),
-    sleep(timeoutMin * 60000).then(() => { log(`Timed out after ${timeoutMin} min; saving profile anyway.`); return ctx.close(); }),
-  ]);
-  log('Window closed. Profile saved; use it with "profileDir" in the plan.');
+async function confirmSignedInReplay(plan, approved) {
+  if (!(plan.signedIn || plan.profileDir) || approved) return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY)
+    die('Signed-in replay needs explicit approval. Review the plan for actions that change real data, then rerun with --confirm-signed-in.');
+  const prompt = createInterface({input: process.stdin, output: process.stdout});
+  try {
+    const answer = await prompt.question('This replay can make real changes to the signed-in site. Review the plan first. Continue? [y/N] ');
+    if (!/^(y|yes)$/i.test(answer.trim())) die('Signed-in replay cancelled.');
+  } finally { prompt.close(); }
+}
+
+function liveShortcutInit() {
+  if (window.__standInLiveShortcut) return;
+  window.__standInLiveShortcut = true;
+  if (window === window.top) {
+    let suppressed = false;
+    window.__standInHideLiveHelp = () => {
+      suppressed = true;
+      document.querySelector('stand-in-live-help')?.remove();
+    };
+    window.__standInShowLiveHelp = async (restore = false) => {
+      if (restore) suppressed = false;
+      if (suppressed || !document.documentElement || await window.__standInLiveState() !== 'ready' || suppressed ||
+          document.querySelector('stand-in-live-help')) return;
+      const host = document.createElement('stand-in-live-help');
+      Object.assign(host.style, {position: 'fixed', zIndex: '2147483647', bottom: '12px', left: '12px',
+        pointerEvents: 'none', font: '14px system-ui'});
+      const root = host.attachShadow({mode: 'open'});
+      const panel = document.createElement('div');
+      panel.setAttribute('role', 'status');
+      Object.assign(panel.style, {background: '#171717', color: 'white', padding: '12px',
+        borderRadius: '6px', maxWidth: '320px', lineHeight: '1.4'});
+      const title = document.createElement('strong');
+      title.textContent = 'Stand-in live recording';
+      const shortcut = document.createElement('strong');
+      shortcut.textContent = 'Ctrl+Shift+9';
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.textContent = 'Dismiss';
+      Object.assign(dismiss.style, {pointerEvents: 'auto', marginTop: '8px'});
+      dismiss.addEventListener('click', window.__standInHideLiveHelp);
+      panel.append(title, document.createElement('br'), 'Sign in first if needed. With this page focused, press ',
+        shortcut, ' to start. Wait for the terminal to say recording, then press it again to stop and save. ' +
+        'Everything visible in this tab is recorded. On Mac, use Control, not Command. ' +
+        'This message disappears before recording.', document.createElement('br'), dismiss);
+      root.append(panel);
+      document.documentElement.append(host);
+    };
+    const show = () => window.__standInShowLiveHelp().catch(error =>
+      console.error(`Stand-in instructions could not be shown: ${error.message}`));
+    show();
+    document.addEventListener('DOMContentLoaded', show, {once: true});
+  }
+  addEventListener('keydown', e => {
+    if (!e.isTrusted || e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'Digit9') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    window.__standInLiveToggle().catch(error => console.error(`Stand-in recording control failed: ${error.message}`));
+  }, true);
+}
+
+async function liveRecording({ctx, page, plan, videoPath, startRecording, capture}) {
+  let state = 'ready', recording;
+  let resolveDone, rejectDone;
+  const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+  // The tab can close before the caller starts awaiting completion.
+  done.catch(() => {});
+  page.once('close', () => rejectDone(new Error(state === 'ready'
+    ? 'The recorded tab closed before recording started.'
+    : 'The recorded tab closed before the recording could be saved; press Ctrl+Shift+9 before closing it.')));
+  ctx.once('close', () => rejectDone(new Error('Chrome closed before the recording was saved.')));
+  await ctx.exposeBinding('__standInLiveState', ({page: source}) => source === page ? state : 'unavailable');
+  await ctx.exposeBinding('__standInLiveToggle', async ({page: source}) => {
+    if (source !== page) {
+      log('Focus the recorded tab to control recording.');
+      throw new Error('Focus the recorded tab to control recording.');
+    }
+    if (state === 'ready') {
+      state = 'starting';
+      try {
+        await page.evaluate(() => new Promise((resolve, reject) => {
+          window.__standInHideLiveHelp();
+          const timer = setTimeout(() => reject(new Error('Could not clear recording instructions; focus the tab and try again.')), 3000);
+          requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
+        }));
+        const startUrl = page.url();
+        recording = await startRecording(page, {
+          frameRate: plan.fps, maxWidth: plan.viewport.width, maxHeight: plan.viewport.height, audio: !!plan.audio,
+        });
+        capture?.arm(startUrl);
+      } catch (error) {
+        state = 'ready';
+        log(`Could not start recording: ${error.message}`);
+        try { await page.evaluate(() => window.__standInShowLiveHelp(true)); }
+        catch { log('Could not restore the on-page shortcut instructions; see the terminal for the shortcut.'); }
+        throw error;
+      }
+      state = 'recording';
+      log('Recording this tab. Press Ctrl+Shift+9 again to stop and save.');
+      return state;
+    }
+    if (state !== 'recording') {
+      log('Recording is already starting or stopping; wait for the terminal status.');
+      throw new Error('Recording is already starting or stopping.');
+    }
+    state = 'stopping';
+    try {
+      capture?.disarm();
+      const video = await recording.stop();
+      if (!video.length) throw new Error('Chrome returned an empty recording.');
+      await mkdir(dirname(videoPath), {recursive: true});
+      await writeFile(videoPath, video, {flag: 'wx'});
+      log(`Saved ${videoPath}`);
+      if (capture) await capture.finish();
+      state = 'saved';
+      resolveDone();
+      return state;
+    } catch (error) {
+      state = 'failed';
+      rejectDone(error);
+      throw error;
+    }
+  });
+  await ctx.addInitScript(liveShortcutInit);
+  return {done};
+}
+
+async function liveCapture({ctx, page, plan, planPath, profileDir}) {
+  const builder = new StepBuilder();
+  let armed = false, startUrl, error, queue = Promise.resolve();
+  await ctx.exposeBinding('__demoCaptureEvent', ({page: source, frame}, event) => {
+    if (!armed || source !== page) return;
+    queue = queue.then(async () => builder.add(event, await frameChain(frame))).catch(e => {
+      error ??= e;
+      log(`Could not capture an action: ${e.message}`);
+    });
+  });
+  await ctx.addInitScript(captureInit);
+  return {
+    arm(url) { startUrl = url; armed = true; },
+    disarm() { armed = false; },
+    async finish() {
+      await queue;
+      const steps = builder.finish(Date.now());
+      const raw = {url: startUrl, viewport: plan.viewport, fps: plan.fps,
+        profileDir: relative(dirname(planPath), profileDir).split('\\').join('/'), steps};
+      await mkdir(dirname(planPath), {recursive: true});
+      await writeFile(planPath, JSON.stringify(raw, null, 2) + '\n', {flag: 'wx'});
+      log(`Saved replay plan ${planPath}${error ? ' (incomplete)' : ''}`);
+      if (builder.secrets) log('Password input was not captured; replace SET-ME in the replay plan if needed.');
+      if (error) throw new Error('The video was saved, but some actions could not be captured. Review the incomplete plan.');
+    },
+  };
 }
 
 async function frameChain(frame) {
   const chain = [];
   for (let f = frame; f?.parentFrame(); f = f.parentFrame()) {
-    const el = await f.frameElement().catch(() => null);
-    if (!el) break;
-    chain.unshift(await el.evaluate(n => n.id ? `#${CSS.escape(n.id)}` : n.getAttribute('name') ? `iframe[name="${n.getAttribute('name')}"]`
-      : n.getAttribute('title') ? `iframe[title="${n.getAttribute('title')}"]` : n.getAttribute('src') ? `iframe[src="${n.getAttribute('src')}"]` : 'iframe'));
+    const el = await f.frameElement();
+    chain.unshift(await el.evaluate(n => {
+      return n.id ? `#${CSS.escape(n.id)}` : n.getAttribute('name') ? `iframe[name="${n.getAttribute('name')}"]`
+        : n.getAttribute('title') ? `iframe[title="${n.getAttribute('title')}"]` : n.getAttribute('src') ? `iframe[src="${n.getAttribute('src')}"]` : 'iframe';
+    }));
   }
   return chain.length === 0 ? null : chain.length === 1 ? chain[0] : chain;
 }
 
-// Capture starts listening *before* the page is opened, so clicks made while a slow site is still loading
-// are kept. Only the profile's automatic `setup` steps (if any) are excluded: `armed` turns on after them.
-async function startCapture({ctx, page, captureFile, captureRaw, armed}) {
-  const state = {armed, builder: new StepBuilder()};
-  const builder = state.builder;
-  let queue = Promise.resolve();
-  const save = async steps => {
-    await mkdir(dirname(captureFile), {recursive: true});
-    await writeFile(captureFile, JSON.stringify({...captureRaw, steps}, null, 2) + '\n');
-  };
-  if (captureRaw.steps?.length && existsSync(captureFile)) {
-    await writeFile(captureFile.replace(/\.json$/i, '') + '.before-capture.json', JSON.stringify(captureRaw, null, 2) + '\n');
-  }
-  await ctx.exposeBinding('__demoCaptureEvent', ({frame}, ev) => {
-    if (!state.armed) return;
-    queue = queue.then(async () => {
-      const chain = await frameChain(frame).catch(() => null);
-      if (builder.add(ev, chain) === false) return;
-      const typingStarted = ev.kind === 'input' && builder._last !== 'input';
-      const shown = ev.kind === 'input' ? `typing into ${JSON.stringify(ev.target).slice(0, 80)}${ev.secret ? ' (password: not captured)' : ''}` :
-        ev.kind === 'enter' ? `Enter (submits ${JSON.stringify(ev.secret ? '' : builder.steps.at(-1)?.text ?? '').slice(0, 60)})` :
-        ev.kind === 'wheel' ? 'scroll' : `${ev.kind} ${JSON.stringify(ev.target ?? ev.key ?? '').slice(0, 90)}`;
-      if ((ev.kind !== 'input' || typingStarted) && (ev.kind !== 'wheel' || builder._last !== 'wheel'))
-        log(`  + ${shown}${chain ? `  (in frame ${JSON.stringify(chain)})` : ''}`);
-      builder._last = ev.kind;
-      await save(builder.snapshot());
-    }).catch(e => log(`capture error: ${e.message}`));
-  });
-  await ctx.addInitScript(captureInit);
-  const badge = () => page.evaluate(on => window.__demoOverlay?.badge(on ? '● Capturing steps: close this window when done'
-    : 'Preparing the page… please wait before clicking'), state.armed).catch(() => {});
-  page.on('domcontentloaded', badge);
-  page.on('load', badge);
-  state.badge = badge;
-  state.arm = async () => {
-    state.armed = true;
-    for (const f of page.frames()) await f.evaluate(captureInit).catch(() => {});
-    await badge();
-  };
-  if (armed) {
-    log('');
-    log(`CAPTURING into ${captureFile}`);
-    log('Do the demo in the browser window exactly as a user would; you can start as soon as the page is usable,');
-    log('even if it is still loading. Click, type, scroll, and pause where the viewer should wait (e.g. while');
-    log('the Assistant answers). Close the window (or tab) when you are done.');
-    log('');
-  }
-  state.finish = async () => {
-    if (!state.armed) await state.arm();
-    await new Promise(r => { if (page.isClosed()) r(); page.once('close', r); ctx.once('close', r); });
-    await queue;
-    return finishCapture({builder, save, captureFile});
-  };
-  return state;
-}
-
-async function finishCapture({builder, save, captureFile}) {
-  const steps = builder.finish(Date.now());
-  await save(steps);
-  log(`Captured ${steps.length} steps → ${captureFile}`);
-  if (builder.secrets) log(`NOTE: ${builder.secrets} password field(s) were not captured: they're marked SET-ME. Sign-in belongs in the profile's setup or a saved profile, not in a demo.`);
-  log('Next: open the plan, tidy anything odd (e.g. add "pauseAfter" to linger), then "Rehearse current plan" and "Record current plan".');
-}
-
-function libraryPaths(planFile) {
-  const abs = resolve(planFile), parts = abs.split(/[\\/]/), i = parts.lastIndexOf('demos');
-  if (i < 0) return null;
-  const root = parts.slice(0, i).join('/') || '/', rest = parts.slice(i + 1).join('/').replace(/\.json$/i, '');
-  return {video: resolve(root, 'recordings', rest + '.mp4'), runDir: resolve(root, '.runs', rest)};
-}
-
-// Record (or rehearse) every plan under a folder, one at a time: parallel recordings compete for CPU.
-async function runAll(dir, a) {
-  const files = [];
-  const walk = d => { for (const e of readdirSync(d, {withFileTypes: true})) {
-    const p = join(d, e.name);
-    if (e.isDirectory()) walk(p); else if (e.name.endsWith('.json')) files.push(p);
-  } };
-  try { walk(resolve(dir)); } catch (e) { die(`Cannot read ${dir}: ${e.message}`); }
-  files.sort();
-  if (!files.length) die(`No plan files under ${dir}`);
-  const pass = ['rehearse', 'headful'].filter(k => a[k]).map(k => `--${k}`)
-    .concat(a.chrome ? ['--chrome', a.chrome] : [], a.connect ? ['--connect', a.connect] : [], a.profile ? ['--profile', a.profile] : []);
-  const rows = [];
-  for (const f of files) {
-    log(`=== ${f}`);
-    const t = performance.now();
-    const r = spawnSync(process.execPath, [process.argv[1], f, ...pass], {stdio: 'inherit'});
-    const lib = libraryPaths(f);
-    rows.push({plan: f, ok: r.status === 0, seconds: +((performance.now() - t) / 1000).toFixed(1), video: a.rehearse ? '' : lib?.video ?? ''});
-  }
-  console.log('\n' + rows.map(r => `${r.ok ? 'OK  ' : 'FAIL'}  ${r.plan}  (${r.seconds}s)${r.video && r.ok ? '  → ' + r.video : ''}`).join('\n'));
-  process.exitCode = rows.every(r => r.ok) ? 0 : 1;
-}
-
-async function main() {
-  const {values: a, positionals} = parseArgs({allowPositionals: true, options: {
-    out: {type: 'string'}, output: {type: 'string'}, rehearse: {type: 'boolean'}, chrome: {type: 'string'},
-    headful: {type: 'boolean'}, plan: {type: 'string'}, connect: {type: 'string'}, profile: {type: 'string'},
-    'timeout-min': {type: 'string'}, extends: {type: 'string'}, headless: {type: 'boolean'}, site: {type: 'string'},
-    'signed-in': {type: 'boolean'}, 'no-signed-in': {type: 'boolean'}, help: {type: 'boolean', short: 'h'},
+async function quickMain() {
+  const {values: options, positionals} = parseArgs({allowPositionals: true, options: {
+    help: {type: 'boolean', short: 'h'}, chrome: {type: 'string'}, output: {type: 'string'},
+    rehearse: {type: 'boolean'}, headless: {type: 'boolean'}, 'confirm-signed-in': {type: 'boolean'},
   }});
-  if (a.help || !positionals.length) {
-    console.log(`usage:
-  record.mjs init-site <name> <url> [--signed-in]     create sites/<name>.json (+ <name>-signed-in.json)
-  record.mjs login --site <name>-signed-in            one-time manual sign-in into the site's browser session
-  record.mjs inspect --site <name> [--out DIR]        (or: inspect <url> [--plan plan.json])
-  record.mjs <plan.json> [--rehearse] [--out DIR] [--output file.mp4]
-  record.mjs all [demosDir] [--rehearse]               every plan under demosDir (default ./demos), one at a time
-  record.mjs capture <plan.json> --site <name>        do the flow yourself in a visible browser; steps are written to plan.json
-common: --chrome PATH | --connect http://127.0.0.1:9222 | --headful`);
+  if (options.help || !positionals.length) {
+    console.log(`Usage:
+  stand-in <https://website>                  Record a video and save an editable replay plan
+  stand-in replay <plan.json> [--rehearse]    Replay the plan, optionally without recording
+
+Options: --chrome PATH, --output VIDEO.mp4, --confirm-signed-in
+Press Ctrl+Shift+9 in the page to start and stop recording.`);
     return;
   }
-  const mode = ['inspect', 'login', 'all', 'capture', 'init-site'].includes(positionals[0]) ? positionals[0] : 'run';
-  const captureMode = mode === 'capture';
-  if (mode === 'all') return runAll(positionals[1] ?? 'demos', a);
-  if (mode === 'init-site') return initSite(positionals[1], positionals[2], a['signed-in']);
-  const inspectMode = mode === 'inspect';
-  // --site NAME is shorthand for sites/NAME.json (as --plan for inspect, --extends for capture, profile for login).
-  const siteFile = a.site && resolve(/\.json$/i.test(a.site) ? a.site : join('sites', `${a.site}.json`));
-  if (siteFile && !existsSync(siteFile)) die(`No site profile ${siteFile}. Create one with: record.mjs init-site <name> <url>`);
-  if (siteFile) { if (inspectMode) a.plan ??= siteFile; if (captureMode) a.extends ??= siteFile; }
+  requireSupportedNode(process.versions.node);
+  const replay = positionals[0] === 'replay';
+  if ((replay && positionals.length !== 2) || (!replay && positionals.length !== 1))
+    throw new Error('Use stand-in <website URL> or stand-in replay <plan.json>.');
+  if (!replay && (options.rehearse || options.headless))
+    throw new Error('Live recording requires visible Chrome; --rehearse is only for replay.');
+  if (options.rehearse && options.output)
+    throw new Error('--output cannot be used with --rehearse.');
 
-  if (mode === 'login') {
-    let url = positionals[1], profileDir = a.profile && resolve(a.profile.replace(/^~(?=\/)/, homedir()));
-    if (siteFile) {
-      const site = await loadPlan(siteFile);
-      url ??= site.loginUrl ?? site.url;
-      profileDir ??= site.profileDir;
-      if (!site.profileDir && !a.profile) die(`${siteFile} has no "profileDir": login is for signed-in site profiles (init-site <name> <url> --signed-in).`);
-    }
-    if (url?.startsWith('SET-ME')) die(`Fill in the URL in ${siteFile} first.`);
-    if (!url || !profileDir) die('usage: record.mjs login --site <signed-in site>   (or: record.mjs login <url> --profile DIR)');
-    const {chromium, findChromeBinary} = await loadDeps();
-    const chromePath = await findChrome(a.chrome, findChromeBinary);
-    return loginFlow(chromium, chromePath, url, profileDir, +(a['timeout-min'] ?? 15));
-  }
-
-  let plan, captureFile, captureRaw;
-  if (inspectMode) {
-    const raw = a.plan ? await loadPlan(a.plan) : {};
-    plan = normalisePlan({...raw, steps: []}, positionals[1] ?? raw.url);
-  } else if (captureMode) {
-    captureFile = positionals[1] && resolve(positionals[1]);
-    if (!captureFile) die('usage: record.mjs capture <new-or-existing-plan.json> [--extends site-profile.json]');
-    if (existsSync(captureFile)) {
-      captureRaw = JSON.parse(await readFile(captureFile, 'utf8'));
-      plan = normalisePlan({...(await loadPlan(captureFile)), steps: []});
-    } else {
-      if (!a.extends) die(`${captureFile} doesn't exist yet: pass --extends <site profile json> so it knows where to start.`);
-      const rel = relative(dirname(captureFile), resolve(a.extends)).split('\\').join('/');
-      captureRaw = {extends: rel, steps: []};
-      plan = normalisePlan({...(await loadPlan(resolve(a.extends))), steps: []});
-    }
-    // The person drives a visible window: fit it on a laptop screen and don't draw a second cursor.
-    // Shrink viewport and zoom by the same factor, so the page lays out exactly as it will when recorded.
-    const f = Math.min(1, 1440 / plan.viewport.width, 860 / plan.viewport.height);
-    plan.viewport = {width: Math.round(plan.viewport.width * f), height: Math.round(plan.viewport.height * f)};
-    plan.zoom = (plan.zoom || 1) * f;
-    plan.overlay = {...plan.overlay, cursor: false, keepAlive: false};
-    plan.headful = !a.headless;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let plan, planPath, videoPath;
+  if (replay) {
+    planPath = resolve(positionals[1]);
+    const raw = JSON.parse(await readFile(planPath, 'utf8'));
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+      throw new Error('The replay plan must be a JSON object.');
+    const supported = new Set(['$schema', 'description', 'notes', 'url', 'steps', 'viewport', 'zoom', 'fps', 'audio',
+      'pace', 'cursor', 'accent', 'constantFrameRate', 'profileDir', 'signedIn', 'leadInMs', 'tailMs', 'timeout', 'chrome', 'overlay']);
+    const unsupported = Object.keys(raw).filter(key => !supported.has(key));
+    if (unsupported.length)
+      throw new Error(`Unsupported plan fields: ${unsupported.join(', ')}. Older profile, setup, masking and private workflows were removed; existing files are unchanged.`);
+    if (typeof raw.url !== 'string' || !Array.isArray(raw.steps))
+      throw new Error('The replay plan must contain a URL and an array of steps.');
+    plan = normalisePlan(await loadPlan(planPath));
+    if (plan.steps.some(s => [s.text, s.value, s.label].some(v => typeof v === 'string' && v.startsWith('SET-ME:'))))
+      throw new Error('The plan contains uncaptured password input. Review it and replace SET-ME before replay.');
+    await confirmSignedInReplay(plan, options['confirm-signed-in']);
+    if (plan.profileDir && !existsSync(plan.profileDir))
+      throw new Error(`The browser session ${plan.profileDir} is missing; record a new demo or update the plan.`);
+    videoPath = resolve(options.output ?? join('recordings', `${basename(planPath, '.json')}-replay-${stamp}.mp4`));
   } else {
-    plan = normalisePlan(await loadPlan(positionals[0]));
+    let url;
+    try { url = new URL(positionals[0]); } catch { throw new Error('Enter a complete website URL, such as https://example.com.'); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+      throw new Error('Enter an http or https website URL without embedded credentials.');
+    const name = `${url.hostname.replace(/[^a-z0-9-]+/gi, '-')}-${stamp}`;
+    planPath = resolve('demos', `${name}.json`);
+    videoPath = resolve(options.output ?? join('recordings', `${name}.mp4`));
+    plan = normalisePlan({url: url.href, profileDir: resolve('.sessions', 'stand-in')});
+    if (existsSync(planPath)) throw new Error(`Replay plan already exists: ${planPath}. Try again.`);
   }
-  if (a.profile) plan.profileDir = resolve(a.profile.replace(/^~(?=\/)/, homedir()));
-  if (a.connect) plan.connect = a.connect;
-  // Demo-library convention: <root>/demos/<sub>/<name>.json records to <root>/recordings/<sub>/<name>.mp4,
-  // with working files (report, frames, contact sheet) in <root>/.runs/<sub>/<name>/.
-  const lib = !inspectMode && !captureMode ? libraryPaths(positionals[0]) : null;
-  const outDir = resolve(a.out ?? lib?.runDir ?? (inspectMode ? 'inspect' : captureMode ? join('.runs', 'capture') : 'recording'));
-  if (!a.output && !plan.output && lib) plan.output = lib.video;
-  await mkdir(outDir, {recursive: true});
+  if (!/\.mp4$/i.test(videoPath)) throw new Error('Video output must end in .mp4.');
+  if (!options.rehearse && existsSync(videoPath)) throw new Error(`Video already exists: ${videoPath}. Choose a new output path.`);
 
   const {chromium, startRecording, findChromeBinary} = await loadDeps();
-  const headful = a.headful ?? plan.headful ?? (platform() === 'darwin' && plan.fps > 60);
+  const chromePath = await findChrome(options.chrome ?? plan.chrome, findChromeBinary);
   const {width: W, height: H} = plan.viewport;
   const proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
-  const launchArgs = [`--window-size=${W},${H}`, '--hide-scrollbars', '--enable-gpu-rasterization',
-    '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-    ...(plan.audio ? ['--autoplay-policy=no-user-gesture-required'] : []), ...(plan.chromeArgs ?? [])];
-  const ctxOpts = {
-    viewport: {width: W, height: H}, deviceScaleFactor: 1, colorScheme: plan.colorScheme, locale: plan.locale,
-    ignoreHTTPSErrors: !!plan.ignoreHTTPSErrors,
-  };
-
-  // Three ways to get a browser:
-  //  connect    → attach to a Chrome the person already launched and signed into (we open + close one tab)
-  //  profileDir → persistent profile from `record.mjs login` (keeps SSO/MFA cookies between runs)
-  //  default    → fresh, throwaway browser (optionally seeded with storageState)
-  let browser, ctx, page, version, cleanup;
-  if (plan.connect) {
-    browser = await chromium.connectOverCDP(plan.connect).catch(e => die(
-      `Could not attach to Chrome at ${plan.connect} (${e.message.split('\n')[0]}). Start Chrome ${MIN_CHROME}+ with ` +
-      `--remote-debugging-port=9222 --user-data-dir=<a dedicated demo profile dir>.`));
-    version = browser.version();
-    if ((parseInt(version, 10) || 0) < MIN_CHROME) die(`Attached Chrome is ${version}; need ${MIN_CHROME}+ for native recording.`);
-    ctx = browser.contexts()[0] ?? await browser.newContext();
-    page = await ctx.newPage();
-    await page.setViewportSize({width: W, height: H});
-    cleanup = async () => { await page.close().catch(() => {}); await browser.close().catch(() => {}); };
-  } else {
-    const chromePath = await findChrome(a.chrome ?? plan.chrome, findChromeBinary);
-    const launch = {executablePath: chromePath, headless: !headful, args: launchArgs,
-      proxy: proxy ? {server: proxy, bypass: process.env.NO_PROXY ?? process.env.no_proxy} : undefined};
+  const launch = {executablePath: chromePath, headless: !!options.headless,
+    viewport: {width: W, height: H}, deviceScaleFactor: 1,
+    args: [`--window-size=${W},${H}`, '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
+    proxy: proxy ? {server: proxy, bypass: process.env.NO_PROXY ?? process.env.no_proxy} : undefined};
+  let browser, ctx;
+  try {
     if (plan.profileDir) {
-      if (!existsSync(plan.profileDir)) die(`profileDir ${plan.profileDir} does not exist. Create it first with: record.mjs login <url> --profile ${plan.profileDir}`);
-      ctx = await chromium.launchPersistentContext(plan.profileDir, {...launch, ...ctxOpts}).catch(e => die(
-        `Could not open profile ${plan.profileDir} (${e.message.split('\n')[0]}). Is another Chrome using it? Close it and retry.`));
-      for (const p of ctx.pages()) await p.close().catch(() => {});
-      version = `${chromeMajor(chromePath)}`;
-      cleanup = () => ctx.close().catch(() => {});
+      ctx = await chromium.launchPersistentContext(plan.profileDir, launch);
     } else {
       browser = await chromium.launch(launch);
-      version = browser.version();
-      ctx = await browser.newContext({...ctxOpts, ...(plan.storageState ? {storageState: plan.storageState} : {})});
-      cleanup = () => browser.close().catch(() => {});
+      ctx = await browser.newContext({viewport: launch.viewport, deviceScaleFactor: 1});
     }
-    page = await ctx.newPage();
-  }
-  log(`Chrome ${version} (${plan.connect ? 'attached' : plan.profileDir ? 'profile' : headful ? 'headful' : 'headless'}) · ${W}x${H} @ ${plan.fps}fps`);
-
-  await ctx.addInitScript(overlayInit, plan.overlay);
-  await ctx.addInitScript(maskInit, {redact: plan.redact, hide: plan.hide, blurPx: plan.blurPx ?? 10});
-  if (plan.zoom && plan.zoom !== 1) {
-    await ctx.addInitScript(z => { if (window.top !== window) return; const set = () => document.documentElement && (document.documentElement.style.zoom = z);
-      set(); document.addEventListener('DOMContentLoaded', set); }, String(plan.zoom));
-  }
-  // Keep everything in one recorded tab: follow links that try to open a new tab/window.
-  ctx.on('page', async popup => {
-    if (popup === page) return;
-    // When attached to someone's own Chrome, leave their other tabs alone.
-    if (plan.connect && (await popup.opener().catch(() => null)) !== page) return;
-    try { await popup.waitForURL(u => u.href !== 'about:blank', {timeout: 5000}); } catch {}
-    const url = popup.url(); await popup.close().catch(() => {});
-    if (url && url !== 'about:blank') { log(`Popup redirected into main tab: ${url}`); await page.goto(url).catch(() => {}); }
-  });
-  page.on('dialog', d => { log(`Dialog (${d.type()}): ${d.message()} → accepted`); setTimeout(() => d.accept().catch(() => {}), 600); });
-
-  const actor = new Actor(page, plan);
-  const report = {url: plan.url, chrome: version, mode: inspectMode ? 'inspect' : a.rehearse ? 'rehearse' : 'record', steps: []};
-  const finish = async code => {
-    await writeFile(join(outDir, 'report.json'), JSON.stringify(report, null, 2));
-    await cleanup();
-    process.exitCode = code;
-  };
-
-  // Capture listens from the very start (see startCapture), but not during the profile's automatic setup.
-  const cap = captureMode ? await startCapture({ctx, page, captureFile, captureRaw, armed: !plan.setup.length}) : null;
-
-  // ---- load + setup (never recorded) ----
-  try {
+    const page = ctx.pages()[0] ?? await ctx.newPage();
+    if (!replay) {
+      const bounds = await page.evaluate(() => ({width: outerWidth, height: outerHeight}));
+      if (bounds.width > 200 && bounds.height > 200) {
+        const scale = Math.min(1, (bounds.width - 48) / W, (bounds.height - 128) / H);
+        if (scale < 1) {
+          plan.viewport = {width: Math.round(W * scale), height: Math.round(H * scale)};
+          await page.setViewportSize(plan.viewport);
+        }
+      }
+    }
+    await ctx.addInitScript(overlayInit, plan.overlay);
+    if (!replay) {
+      const capture = await liveCapture({ctx, page, plan, planPath, profileDir: plan.profileDir});
+      const {done} = await liveRecording({ctx, page, plan, videoPath, startRecording, capture});
+      page.on('dialog', d => log(`Browser ${d.type()} dialog: respond in Chrome.`));
+      await page.goto(plan.url, {waitUntil: 'domcontentloaded', timeout: 45000});
+      log('Sign in if needed. Press Ctrl+Shift+9 in the page to start, then again to stop and save.');
+      log('The video captures this tab. The video, replay plan and saved browser session may contain sensitive information.');
+      await done;
+      return;
+    }
+    if (plan.zoom && plan.zoom !== 1)
+      await ctx.addInitScript(z => { const set = () => { if (document.documentElement) document.documentElement.style.zoom = z; };
+        set(); document.addEventListener('DOMContentLoaded', set); }, String(plan.zoom));
+    page.on('dialog', d => { log(`Accepting browser ${d.type()} dialog during replay.`); d.accept().catch(e => log(`Dialog failed: ${e.message}`)); });
     await page.goto(plan.url, {waitUntil: 'load', timeout: 45000});
-  } catch (e) {
-    report.error = `Could not load ${plan.url}: ${e.message.split('\n')[0]}`;
-    log(report.error); return finish(1);
-  }
-  await page.waitForLoadState('networkidle', {timeout: 6000}).catch(() => {});
-  await actor.settle();
-
-  const runSteps = async (steps, phase, rec) => {
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i], label = `${phase}[${i}] ${describe(step)}`;
-      const entry = {phase, index: i, action: step.action, description: describe(step)};
-      if (rec) entry.t = (performance.now() - rec.t0) / 1000;
-      try {
-        await actor.run(step, step.timeout ?? plan.timeout);
-        await actor.settle();
-        await actor.wait(step.pauseAfter ?? actor.defaultPauseAfter(step));
-        entry.ok = true;
-      } catch (e) {
-        if (step.optional) { entry.ok = true; entry.skipped = String(e.message).split('\n')[0]; log(`skip (optional) ${label}`); }
-        else {
-          entry.ok = false; entry.error = String(e.message).split('\n').slice(0, 3).join(' ');
-          report.steps.push(entry);
-          log(`FAILED ${label}\n  ${entry.error}`);
-          await page.screenshot({path: join(outDir, 'failure.png')}).catch(() => {});
-          await writeFile(join(outDir, 'failure.txt'), await pageText(page, plan.redact).catch(() => '')).catch(() => {});
-          report.pageAtFailure = await inventory(page).catch(() => null);
-          if (report.pageAtFailure) report.pageAtFailure = JSON.parse(maskText(JSON.stringify(report.pageAtFailure), await secretsOf(page, plan.redact)));
-          return false;
-        }
-      }
-      if (rec) entry.tEnd = (performance.now() - rec.t0) / 1000;
-      if (phase === 'steps' && (rec || a.rehearse)) {
-        const base = join(outDir, 'steps', `${String(i + 1).padStart(2, '0')}-${step.action}`);
-        await mkdir(dirname(base), {recursive: true});
-        // Text after every step (cheap, fine while recording); screenshots only in rehearsals.
-        let txt = await pageText(page, plan.redact).catch(e => `(could not read page: ${e.message})`);
-        if (actor.lastWait) {
-          const w = actor.lastWait;
-          actor.lastWait = null;
-          entry.waited = {ms: w.waitedMs, ...(w.warning ? {warning: w.warning} : {})};
-          if (w.watched) txt = `===== WATCHED AREA (what the wait step followed; check the answer is complete) =====\n` +
-            `${maskText(w.watched, await secretsOf(page, plan.redact))}\n\n===== WHOLE PAGE =====\n` + txt;
-        }
-        await writeFile(base + '.txt', txt);
-        entry.text = base + '.txt';
-        if (!rec) { await page.screenshot({path: base + '.png'}).catch(() => {}); entry.screenshot = base + '.png'; }
-      }
-      report.steps.push(entry);
-      log(`ok ${label}`);
+    const actor = new Actor(page, plan);
+    await actor.settle();
+    let recording;
+    if (!options.rehearse) {
+      await page.mouse.move(actor.mouse.x, actor.mouse.y);
+      recording = await startRecording(page, {frameRate: plan.fps, maxWidth: W, maxHeight: H, audio: !!plan.audio});
+      await page.waitForTimeout(plan.leadInMs);
     }
-    return true;
-  };
-
-  if (cap && !cap.armed) await cap.badge();
-  if (!(await runSteps(plan.setup, 'setup'))) return finish(1);
-  if (plan.setup.length) await actor.settle();
-
-  if (captureMode) {
-    if (!cap.armed) {
-      await cap.arm();
-      log('');
-      log(`CAPTURING into ${captureFile}`);
-      log('Do the demo in the browser window exactly as a user would. Click, type, scroll, and pause where the');
-      log('viewer should wait (e.g. while the Assistant answers). Close the window (or tab) when you are done.');
-      log('');
-    }
-    await cap.finish();
-    report.mode = 'capture';
-    return finish(0);
-  }
-
-  if (inspectMode) {
-    report.page = await inventory(page);
-    report.page = JSON.parse(maskText(JSON.stringify(report.page), await secretsOf(page, plan.redact)));
-    await writeFile(join(outDir, 'page.txt'), await pageText(page, plan.redact).catch(() => ''));
-    await page.screenshot({path: join(outDir, 'page.png')});
-    await page.screenshot({path: join(outDir, 'page-full.png'), fullPage: true}).catch(() => {});
-    await writeFile(join(outDir, 'elements.json'), JSON.stringify(report.page, null, 2));
-    log(`Wrote ${join(outDir, 'elements.json')}, page.txt, page.png, page-full.png`);
-    return finish(0);
-  }
-
-  if (a.rehearse) {
-    await rm(join(outDir, 'steps'), {recursive: true, force: true});
-    const ok = await runSteps(plan.steps, 'steps');
-    log(ok ? `Rehearsal passed. Screenshots in ${join(outDir, 'steps')}` : 'Rehearsal failed: see report.json / failure.png');
-    return finish(ok ? 0 : 1);
-  }
-
-  // ---- record ----
-  await page.mouse.move(actor.mouse.x, actor.mouse.y);
-  await page.waitForTimeout(300);
-  const videoPath = resolve(a.output ?? plan.output ?? join(outDir, 'recording.mp4'));
-  await rm(join(outDir, 'steps'), {recursive: true, force: true});
-  const rec = await startRecording(page, {frameRate: plan.fps, maxWidth: W, maxHeight: H, audio: !!plan.audio});
-  rec.t0 = performance.now();
-  await page.waitForTimeout(plan.leadInMs);
-  const ok = await runSteps(plan.steps, 'steps', rec);
-  if (ok) {
-    await page.evaluate(() => window.__demoOverlay?.caption(null)).catch(() => {});
-    await page.waitForTimeout(plan.tailMs);
-  }
-  const t = performance.now();
-  const buf = await rec.stop();
-  report.stopMs = Math.round(performance.now() - t);
-  const target = ok ? videoPath : videoPath.replace(/\.mp4$/i, '') + '.partial.mp4';
-  await mkdir(dirname(target), {recursive: true});
-  await writeFile(target, buf);
-  report.video = {path: target, bytes: (await stat(target)).size, durationS: +((performance.now() - rec.t0) / 1000).toFixed(2)};
-
-  if (has('ffprobe')) {
-    const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries',
-      'stream=codec_name,width,height,avg_frame_rate:format=duration,bit_rate', '-of', 'json', target], {encoding: 'utf8'});
+    let failure;
     try {
-      const j = JSON.parse(r.stdout), s = j.streams[0];
-      const [n, d] = s.avg_frame_rate.split('/').map(Number);
-      Object.assign(report.video, {codec: s.codec_name, width: s.width, height: s.height, fps: +(n / d).toFixed(1),
-        durationS: +(+j.format.duration).toFixed(2), mbps: +(j.format.bit_rate / 1e6).toFixed(1)});
-    } catch {}
+      for (const [index, step] of plan.steps.entries()) {
+        try {
+          await actor.run(step, step.timeout ?? plan.timeout);
+          if (step.action === 'waitForStable' && step.around && step.requireChange !== false && actor.lastWait?.warning)
+            throw new AssistantResponseError(actor.lastWait.warning);
+          await actor.settle();
+          await actor.wait(step.pauseAfter ?? actor.defaultPauseAfter(step));
+          log(`Replayed step ${index + 1}: ${step.action}`);
+        } catch (error) {
+          if (!step.optional) throw error;
+          log(`Skipped optional step ${index + 1}: ${error.message}`);
+        }
+      }
+      if (recording) await page.waitForTimeout(plan.tailMs);
+    } catch (error) { failure = error; }
+    if (recording) {
+      const video = await recording.stop();
+      if (!video.length) throw new Error('Chrome returned an empty replay recording.');
+      const target = failure ? videoPath.replace(/\.mp4$/i, '.partial.mp4') : videoPath;
+      await mkdir(dirname(target), {recursive: true});
+      await writeFile(target, video, {flag: 'wx'});
+      log(`Saved ${target}`);
+    }
+    if (failure) throw failure;
+    if (options.rehearse) log('Rehearsal passed.');
+  } finally {
+    if (browser) await browser.close();
+    else if (ctx) await ctx.close();
   }
-  // Frames for verification: one per step, captured just before the next step begins.
-  if (ok && has('ffmpeg')) {
-    const framesDir = join(outDir, 'frames');
-    await rm(framesDir, {recursive: true, force: true});
-    await mkdir(framesDir, {recursive: true});
-    const steps = report.steps.filter(s => s.phase === 'steps' && s.tEnd != null);
-    const times = steps.map(s => Math.max(0, s.tEnd - 0.1));
-    times.unshift(0.3);
-    times.forEach((ts, i) => spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', ts.toFixed(2), '-i', target, '-frames:v', '1',
-      join(framesDir, `${String(i).padStart(2, '0')}.png`)]));
-    const cols = Math.min(4, times.length), rows = Math.ceil(times.length / cols);
-    spawnSync('ffmpeg', ['-v', 'error', '-y', '-framerate', '1', '-i', join(framesDir, '%02d.png'), '-vf',
-      `scale=640:-2,pad=iw+8:ih+8:4:4:color=0x222222,tile=${cols}x${rows}:color=0x222222`, '-frames:v', '1',
-      join(outDir, 'contact-sheet.png')]);
-    report.contactSheet = join(outDir, 'contact-sheet.png');
-    report.contactSheetNote = 'Tile 0 = start of video; tile N = end of step N.';
-  }
-  log(ok ? `Saved ${target}` : `Recording stopped early; partial video at ${target}`);
-  log(JSON.stringify(report.video));
-  return finish(ok ? 0 : 1);
 }
 
-main().catch(e => die(e.stack ?? String(e)));
+export {Actor, captureInit, findChrome, liveCapture, liveRecording, requireSupportedNode, StepBuilder};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
+  quickMain().catch(e => die(e.stack ?? String(e)));

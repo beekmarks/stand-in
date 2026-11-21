@@ -1,5 +1,6 @@
 {
   "extends": "sample.json",
+  "signedIn": true,
   "url": "../examples/sample-site/portal.html",
   "redact": [".portfolio-total", ".acct-balance", ".acct-number"],
   "hide": ["#survey"],

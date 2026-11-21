@@ -1,8 +1,8 @@
 {
-  // Autocomplete, hover docs and validation for demo plans and site profiles.
+  // Autocomplete, hover docs and validation for replay plans.
   "json.schemas": [
     {
-      "fileMatch": ["/demos/**/*.json", "/sites/*.json", "/docs/example-plan.json"],
+      "fileMatch": ["/demos/**/*.json"],
       "url": "./tools/recorder/plan.schema.json"
     }
   ],

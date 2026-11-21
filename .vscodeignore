@@ -1,0 +1,12 @@
+**
+!package.json
+!README.md
+!LICENSE
+!extension.cjs
+!.github/skills/stand-in/SKILL.md
+!docs/plan-format.md
+!docs/recipes.md
+!docs/company-pilot-guide.md
+!tools/recorder/record.mjs
+!tools/recorder/plan.schema.json
+!node_modules/**

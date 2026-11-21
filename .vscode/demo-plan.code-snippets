@@ -4,7 +4,7 @@
     "scope": "json,jsonc", "prefix": "demo-plan",
     "body": [
       "{",
-      "  \"extends\": \"../../sites/${1:my-site}.json\",",
+      "  \"url\": \"${1:https://example.com}\",",
       "  \"description\": \"${2:One-line description of the feature}\",",
       "  \"steps\": [",
       "    $0",

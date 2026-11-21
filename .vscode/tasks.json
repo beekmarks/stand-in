@@ -1,115 +1,37 @@
 {
-  // Command Palette → "Tasks: Run Task" → pick a "Demo:" task.
-  // "current plan" tasks act on the plan file open in the editor (a .json under demos/).
-  // Every task is a plain `node tools/recorder/record.mjs …` command; see README for terminal equivalents.
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Demo: Install recorder (one-time)",
-      "detail": "npm ci in tools/recorder (pinned by package-lock.json)",
-      "type": "shell",
-      "command": "npm ci --no-audit --no-fund",
+      "label": "Demo: Set up recorder (one-time)",
+      "detail": "Install recorder dependencies after installing Node.js 24.11 or newer",
+      "type": "process",
+      "command": "npm",
+      "args": ["ci", "--no-audit", "--no-fund"],
       "options": {"cwd": "${workspaceFolder}/tools/recorder"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
+      "problemMatcher": []
     },
     {
-      "label": "Demo: New site profile",
-      "detail": "Creates sites/<name>.json for a website (optionally a signed-in variant)",
+      "label": "Demo: Record website",
+      "detail": "Enter a website URL, then use Ctrl+Shift+9 to start and stop recording",
       "type": "process",
       "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "init-site", "${input:newSiteName}", "${input:newSiteUrl}", "${input:signedInFlag}"],
+      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "${input:url}"],
       "options": {"cwd": "${workspaceFolder}"},
       "problemMatcher": [],
       "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
     },
     {
-      "label": "Demo: Sign in to a site (one-time)",
-      "detail": "Opens Chrome on the site's sign-in page; sign in (MFA too), then close the window",
+      "label": "Demo: Replay open plan",
+      "detail": "Open a demo JSON first. Replay may change real data and may ask for confirmation.",
       "type": "process",
       "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "login", "--site", "${input:site}"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Capture new demo (do it yourself)",
-      "detail": "Opens Chrome on the site; perform the flow; every click/type/scroll becomes a plan step",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "capture", "demos/${input:demoPath}.json", "--site", "${input:site}"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Re-capture current plan",
-      "detail": "Redo the open plan's steps by demonstration (old version kept as *.before-capture.json)",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "capture", "${file}"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Rehearse current plan",
-      "detail": "Run the open plan without recording; a screenshot + text snapshot per step in .runs/",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "${file}", "--rehearse"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Record current plan",
-      "detail": "Record the open plan to recordings/…/<name>.mp4",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "${file}"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true},
-      "group": {"kind": "build", "isDefault": true}
-    },
-    {
-      "label": "Demo: Rehearse all",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "all", "demos", "--rehearse"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Record all",
-      "detail": "Every plan under demos/, one at a time",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "all", "demos"],
-      "options": {"cwd": "${workspaceFolder}"},
-      "problemMatcher": [],
-      "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
-    },
-    {
-      "label": "Demo: Inspect a site",
-      "detail": "List clickable elements (incl. iframes), page text + screenshot → .runs/inspect/",
-      "type": "process",
-      "command": "node",
-      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "inspect", "--site", "${input:site}", "--out", ".runs/inspect"],
+      "args": ["${workspaceFolder}/tools/recorder/record.mjs", "replay", "${file}"],
       "options": {"cwd": "${workspaceFolder}"},
       "problemMatcher": [],
       "presentation": {"reveal": "always", "panel": "dedicated", "clear": true}
     }
   ],
   "inputs": [
-    {"id": "site", "type": "promptString", "description": "Site profile name (file in sites/ without .json), e.g. sample or sample-signed-in", "default": "sample"},
-    {"id": "demoPath", "type": "promptString", "description": "Demo path under demos/ (no .json), e.g. my-site/open-an-account", "default": "my-site/new-demo"},
-    {"id": "newSiteName", "type": "promptString", "description": "New site name (lowercase-with-dashes), e.g. my-site"},
-    {"id": "newSiteUrl", "type": "promptString", "description": "Start page URL (signed-out home page)"},
-    {"id": "signedInFlag", "type": "pickString", "description": "Also create a signed-in profile for this site?",
-      "options": [{"label": "No (public pages only)", "value": "--no-signed-in"}, {"label": "Yes (adds <name>-signed-in.json)", "value": "--signed-in"}], "default": "--no-signed-in"}
+    {"id": "url", "type": "promptString", "description": "Website address to record (for example, https://example.com)", "default": "https://"}
   ]
 }
