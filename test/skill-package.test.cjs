@@ -48,7 +48,7 @@ test('standalone skill archive contains working, self-contained recorder resourc
     assert.ok(names.includes('START-HERE.md'));
     assert.ok(names.includes('stand-in/SKILL.md'));
     assert.ok(names.includes('stand-in/recorder/node_modules/playwright-core/package.json'));
-    assert.ok(names.includes('stand-in/recorder/node_modules/chrome-capture/package.json'));
+    assert.ok(names.includes('stand-in/recorder/node_modules/mediabunny/package.json'));
     assert.ok(names.every(name => (name === 'START-HERE.md' || name.startsWith('stand-in/')) &&
       !name.includes('/.sessions/') && !name.includes('/recordings/') && !name.includes('/demos/')));
     const skill = await readFile(path.join(temp, 'stand-in/SKILL.md'), 'utf8');
@@ -59,7 +59,7 @@ test('standalone skill archive contains working, self-contained recorder resourc
     assert.match(execFileSync(process.execPath, ['record.mjs', '--help'], {cwd, encoding: 'utf8'}),
       /stand-in replay/);
     execFileSync(process.execPath, ['--input-type=module', '-e',
-      "await import('playwright-core'); await import('chrome-capture'); await import('mediabunny')"], {cwd});
+      "await import('playwright-core'); await import('mediabunny')"], {cwd});
   } finally {
     await rm(temp, {recursive: true, force: true});
   }

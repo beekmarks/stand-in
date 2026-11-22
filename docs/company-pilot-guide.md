@@ -1,49 +1,100 @@
-# Try Stand-in: record a website demo
+# Try Stand-in: a website demo video in one take
 
-Stand-in makes a video of what you do on a website. You can try it without writing code.
+Stand-in turns what you do on a website into a video you can share. Press Shift twice, show the site,
+press Shift twice again, and a few seconds later you have a finished MP4. You don't need to write code or edit
+video.
 
-**Choose how to use Stand-in:**
+## What you'll get
 
-1. **VS Code extension:** Use a menu command and record the demo yourself. This is the simplest
-   option without an assistant; your team provides the `.vsix` file.
-2. **Copilot skill:** Ask an assistant to record the actions or start a manual recording. The skill
-   comes with the extension, or your team can provide the standalone skill ZIP. The standalone
-   skill's discovery in VS Code has not yet been verified.
-3. **Command line:** If you're comfortable with a terminal, see the
-   [command-line instructions](https://github.com/beekmarks/stand-in#command-line-from-source).
+- **A finished video**, a standard MP4 that plays in QuickTime, Windows, PowerPoint, Teams and Slack.
+  It's named after the site and the time, such as `wikipedia.org-2026-11-22-14-05.mp4`, and VS Code
+  offers to open it.
+- **No dead air.** Long pauses where nothing on screen changes are shortened to at most 3 seconds, so
+  you can stop and think while recording.
+- **No lost takes.** The video is saved while you record. If Chrome closes or crashes early, you still
+  get everything up to that moment.
+- **A record of your steps, so you can make the video again.** Stand-in also saves a list of the
+  clicks and typing in your demo (in the **demos** folder). Later, it can repeat those steps and record a
+  fresh video, for example after the website changes, or with captions added. See
+  [Make the video again](#optional-make-the-video-again).
 
-You do not need both the extension and the standalone skill.
+## Set up once
 
-## Option 1: use the VS Code extension
-
-### Set up once
-
-You need these on your computer:
+You need:
 
 1. **VS Code 1.109 or newer.** [Download VS Code](https://code.visualstudio.com/).
-2. **Node.js 24.11 or newer.** [Download Node.js](https://nodejs.org/en/download). Choose an LTS
-   installer for your computer and follow the installation instructions.
-3. **Google Chrome 153 or newer.** [Download Chrome](https://www.google.com/chrome/). Chrome Beta,
-   Dev, Canary, and Chrome for Testing also work.
-4. **The Stand-in `.vsix` file** from your team.
+2. **Google Chrome 153 or newer.** [Download Chrome](https://www.google.com/chrome/).
+3. **The Stand-in `.vsix` file** from your team.
 
-If your company manages software installations, ask your IT team for help with any of these.
-After installing Node.js, fully quit and reopen VS Code.
+In VS Code, open the Command Palette (**Cmd+Shift+P** on a Mac, **Ctrl+Shift+P** on Windows), choose
+**Extensions: Install from VSIX**, and select the file. That's everything: the extension uses the
+Node.js built into VS Code. If your company manages software installations, ask your IT team for help.
 
-### Install the extension
+## Make your first video
 
-1. Open VS Code.
-2. Open the Command Palette: press **Cmd+Shift+P** on a Mac, or **Ctrl+Shift+P** on Windows/Linux.
-3. Type **Extensions: Install from VSIX** and select it.
-4. Choose the Stand-in `.vsix` file your team provided. Reload VS Code if prompted.
+1. Open the Command Palette and choose **Stand-in: Record Website**.
+2. Enter a website address, such as `wikipedia.org`, and press Enter.
+3. When Chrome opens, get the page ready. If your demo needs you to sign in, do it now; Stand-in
+   remembers the sign-in for next time.
+4. Press **Shift twice**, quickly. The tab's title now shows a red dot and a timer (● 0:01): you're
+   recording. Do your demo.
+5. Press **Shift twice** again. Chrome closes; a few seconds later VS Code says **Your video is
+   ready**. Choose **Open Video**.
+
+Shift on its own doesn't type anything, so it won't get in the way of your demo. If pressing Shift
+twice does nothing, click in the Stand-in terminal in VS Code and press **Enter** instead:
+once to start, once to stop. (To see the terminal, choose **View > Terminal**.)
+
+Stand-in doesn't ask where to save. Videos go into the folder open in VS Code or, if none is, into
+**Movies/Stand-in** in your home folder (**Videos/Stand-in** on Windows). **Show in Folder** in the
+"Your video is ready" message takes you there.
+
+## What to expect
+
+- Only the tab Stand-in opened is recorded, across page changes in it: not the address bar, other
+  tabs, browser dialogs or sound.
+- The video is ready a few seconds after you stop, roughly a quarter of the recording's length. The
+  terminal shows how long it is and how much the pauses were shortened.
+- If something goes wrong, Stand-in says what happened and what to do in one sentence. When the fix is
+  installing or updating Chrome, the message has a button for it.
+
+## Before you share
+
+- The video shows everything that was visible in the tab. Stand-in doesn't hide account details or
+  other sensitive information, so watch it first and use video editing software to remove anything
+  that shouldn't be shared.
+- The replay plan in **demos** can contain website addresses and text you typed (password fields are
+  left out).
+- The hidden **.sessions** folder holds your sign-in cookies. Keep it private.
+- Check your company's rules before storing or sharing videos, plans or session data.
+
+## Optional: make the video again
+
+Replay visits the site again, repeats what you did, and records a new video. This is useful after the
+site changes, or after you add captions to the plan. Your first video isn't changed.
+
+1. Choose **Open Replay Plan** in the "Your video is ready" message.
+2. Choose **Stand-in: Replay Plan**. The open plan replays straight away.
+3. Replay can make real changes on signed-in sites. A plan you recorded replays without asking. If the
+   plan was edited or came from someone else, the terminal asks once: type **y** and press Enter only if
+   you approve its actions.
+
+If a step can't be done because the site changed, Stand-in stops, says which step and why, and keeps
+the video up to that point.
+
+## Optional: ask an assistant
+
+If GitHub Copilot is available in your VS Code setup, you can describe the demo instead of performing
+it. For example: “Use Stand-in to open Wikipedia, search for space exploration, and show the result.”
+You'll still need to sign in yourself and approve any signed-in replay.
 
 ## Option 2: use the Copilot skill without the extension
 
 **Pilot note:** Discovery of the standalone skill in VS Code has not yet been verified.
 
-You need VS Code with GitHub Copilot and agent skills available, Node.js 24.11 or newer, Chrome 153
-or newer, and the Stand-in skill ZIP from your team. See the download links in the setup list above.
-After installing Node.js, fully quit and reopen VS Code.
+You need VS Code with GitHub Copilot and agent skills available, [Node.js](https://nodejs.org/en/download)
+22 or newer, Chrome 153 or newer, and the Stand-in skill ZIP from your team. After installing Node.js,
+fully quit and reopen VS Code.
 
 1. Extract the ZIP. It contains this guide and a folder named `stand-in` with `SKILL.md` and
    supporting files.
@@ -63,76 +114,15 @@ After installing Node.js, fully quit and reopen VS Code.
    and show the result.”** Review and approve any requested tool actions.
 
 To drive the website yourself instead, say **“Use Stand-in to let me record a demo of
-https://www.wikipedia.org manually.”** The assistant will start the recorder and explain the
-shortcut. It should report where it saved the video and replay plan.
+https://www.wikipedia.org manually.”** The assistant will start the recorder and tell you to press
+Shift twice to start and stop, and should report where it saved the video and replay plan. With the skill alone, ask
+Copilot to replay a plan instead of using the Command Palette.
 
-The skill includes the recorder dependencies, so you do not need to install additional recorder
-packages. The extension's Command Palette commands are not available with the skill alone.
-Skill availability depends on the active agent and your company's Copilot settings.
-
-## Make your first video
-
-These steps use the extension. For the skill, ask Copilot as described above.
-
-1. In VS Code, open the folder where you want to save the video. If you don't open one, Stand-in will
-   ask you to choose a folder.
-2. Open the Command Palette and choose **Stand-in: Record Website**.
-3. Enter a website address, such as `wikipedia.org`, and press Enter. Choose a folder if prompted.
-4. When Chrome opens, get the page ready. If your demo needs you to sign in, you can do that now.
-5. Press **Control+Shift+9**. On a Mac, use **Control**, not Command.
-6. Wait until the VS Code terminal says **Recording this tab**. Then do the actions you want in your demo.
-7. Press **Control+Shift+9** again. Chrome closes; a few seconds later VS Code says **Your video is
-   ready**. Choose **Open Video** to watch it.
-
-If the shortcut does nothing, click in the Stand-in terminal and press **Enter** instead: once to start,
-once to stop.
-
-To see the terminal, choose **View > Terminal** in VS Code.
-
-## Find your video
-
-Choose **Show in Folder** in the "Your video is ready" message, or look inside **recordings** in the
-folder you chose. Videos are named after the site and the time, such as
-`wikipedia.org-2026-11-21-14-05.mp4`, and are standard H.264 MP4 files that play in QuickTime, Windows
-Media Player, PowerPoint and Teams. Watch the video before sharing.
-
-There will also be a `.json` file in the **demos** folder. You can ignore it unless you want to replay
-the demo or add effects later.
-
-## Before you share
-
-- The video includes everything visible in the recorded tab. Stand-in does **not** automatically hide
-  account details or other sensitive information. Use video editing software to remove anything that
-  shouldn't be shared.
-- The replay plan may contain website addresses and typed text. Password fields are replaced with
-  placeholders, but other sensitive information may still be saved.
-- The hidden **.sessions** folder may contain sign-in cookies. Keep it private. Check your company's
-  rules before storing or sharing videos, plans, or session data.
-- Browser controls, other tabs, native dialogs, and audio are not recorded. If you close the recorded
-  tab before stopping, the video cannot be saved.
-
-## Optional: replay a demo
-
-Replay opens the website and performs the actions in your plan again, creating a new video. It does
-not edit the original MP4, and it may not reproduce the original exactly if the website has changed.
-With the standalone skill, ask Copilot to review and replay your plan instead of using the command below.
-
-1. Review the `.json` file in **demos**.
-2. Open the Command Palette, choose **Stand-in: Replay Plan**, and select the file.
-3. The actions can change real data. If the terminal asks for confirmation, type **y** and press Enter
-   only if you approve running them. Confirmation is required for Stand-in recordings even if you were
-   signed out.
-4. Wait for the new video path in the terminal and review the video.
-
-## Optional: ask an assistant
-
-If GitHub Copilot is available in your VS Code setup, you can ask it to make a demo using Stand-in.
-For example: “Use Stand-in to open Wikipedia, search for space exploration, and show the result.”
-The assistant can create a replay plan and record it; availability depends on your company's Copilot
-setup. You'll still need to sign in yourself and approve any signed-in replay.
+The skill includes the recorder's dependencies; the extension's Command Palette commands are not
+available with the skill alone. Skill availability depends on the active agent and your company's
+Copilot settings.
 
 ## Need help?
 
-If the shortcut doesn't work, press **Enter** in the Stand-in terminal to start and stop instead. If a
-command isn't available or recording still won't start, contact the person who gave you Stand-in.
-If VS Code reports an older Node version, fully quit and reopen it after installing Node.js.
+See [Troubleshooting](recipes.md), or contact the person who gave you Stand-in. For the command line,
+see [Other ways to use Stand-in](https://github.com/beekmarks/stand-in#other-ways-to-use-stand-in).

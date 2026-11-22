@@ -11,8 +11,10 @@ or newer.
 
 ## VS Code can't find Node.js, or says the version is too old
 
-Install an LTS version of [Node.js](https://nodejs.org/en/download) that is at least 24.11. Fully quit
-and reopen VS Code, then try the command again. If it still cannot find the correct version, make sure
+The extension normally uses the Node.js built into VS Code, so this only happens with a VS Code from
+before early 2026, or with the skill or command line. Update VS Code, or install
+[Node.js](https://nodejs.org/en/download) 22 or newer. Fully quit and reopen VS Code, then try the
+command again. If it still cannot find the correct version, make sure
 your Node installation is available on your system's PATH; you may need help from your IT administrator.
 The error in the terminal can identify the version Stand-in found.
 
@@ -31,29 +33,39 @@ Some sites block automated browsers or require additional security checks. Compl
 security checks yourself; do not bypass site protections. A saved session may also expire or be rejected
 by the website.
 
-## The shortcut doesn't start or stop recording
+## Pressing Shift twice doesn't start or stop recording
 
-Click inside the recorded website tab and press **Control+Shift+9**. On a Mac, use **Control**, not
-Command. Check the VS Code terminal for the current status: wait for **Recording this tab** before you
-start your demo. Press the shortcut again and wait for **Your video is ready**.
+Click inside the recorded website tab, then press **Shift** twice, quickly: two taps within about half
+a second, with nothing else in between. While recording, the tab's title starts with a red dot and a
+timer (● 0:42); the terminal also says **Recording this tab**. Press Shift twice again and wait for
+**Your video is ready**. (The original shortcut, **Control+Shift+9**, also still works.)
 
-Only the tab Stand-in opened is recorded. If the site opened another tab, the terminal says so; the
-shortcut doesn't work there. Switch back to the original tab (or close the new one) first.
-If an embedded part of the page doesn't respond to the shortcut, click the main page and try again.
+Only the tab Stand-in opened is recorded. If the site opened another tab, the terminal says so; pressing
+Shift twice doesn't work there. Switch back to the original tab (or close the new one) first.
+If an embedded part of the page doesn't respond, click the main page and try again.
 
-If the shortcut still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code
+If it still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code
 and press **Enter** to start (Chrome comes to the front), then click back in the terminal and press
 **Enter** again to stop and save.
 
 ## I can't find my video or plan
 
 Choose **Show in Folder** in the "Your video is ready" message. Or open **View > Terminal** in VS Code and
-look for the paths after **Saved the replay plan** and **Your video is ready**.
+look for the paths after **Replay plan** and **Your video is ready**.
 They're normally in the **recordings** and **demos** folders inside the workspace folder or the folder
 you chose. If the terminal reports an error, don't assume both files were saved: a video may have been
 saved even if the plan could not be saved.
 
-Closing the recorded tab before stopping loses the video. Start a new recording if this happened.
+If the tab or Chrome was closed, or you pressed Ctrl+C, before stopping, the video up to that moment is
+still saved and the terminal says so. Only a recording stopped within its first few seconds can be too
+short to save.
+
+## My video is shorter than my recording
+
+That's on purpose: pauses where nothing on screen changed are shortened to at most 3 seconds, and the
+time before your first action and after your last is trimmed. The terminal shows the before and after
+length. Anything that moves is kept, so to hold a moment longer, keep the pointer moving, or replay the
+plan and raise the `ms` of its `wait` step. Replays keep their timing exactly.
 
 ## The video won't play
 
@@ -66,9 +78,9 @@ as HandBrake.
 ## Replay asks for confirmation or fails
 
 Replay runs the plan's actions on the website again; it is not a video player. Those actions can change
-real data. Review the JSON plan, then type **y** and press Enter in the terminal only if you approve.
-Stand-in recordings use a saved browser session, so confirmation is required even for a signed-out
-recording.
+real data, because replay uses your saved browser session. A plan you recorded replays without asking.
+When it's new to Stand-in or has changed since (edited, or from someone else), the terminal asks once:
+review the JSON plan, then type **y** and press Enter only if you approve.
 
 If a page, selector, or signed-in session has changed, replay may fail. The terminal says which step
 failed and why, and saves the video up to that point with `-incomplete` in its name. Sign in during a new

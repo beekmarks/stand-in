@@ -10,7 +10,7 @@ Use the same recorder and plan format as the person. The bundled
 relative to this skill file, not to the person's workspace. Resolve the recorder's absolute path and run
 `node "<absolute recorder path>" ...` with the person's chosen output folder as the working directory.
 The installed extension includes its dependencies; do not install packages into its directory. In a source
-checkout, if dependencies are missing, run `npm ci` in `tools/recorder`. Node.js 24.11+ and Chrome 153+
+checkout, if dependencies are missing, run `npm ci` in `tools/recorder`. Node.js 22+ and Chrome 153+
 are required. Do not write custom browser scripts or edit recorder internals when making a demo.
 
 ## Choose the workflow
@@ -54,12 +54,12 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 
 1. Use the **Stand-in: Record Website** command, or run `node "<absolute recorder path>" <url>` in the
    chosen output folder.
-2. The person prepares the page and signs in if needed. Tell them to focus the page and press
-   **Ctrl+Shift+9** to start, then again to stop and save (Control, not Command, on Mac). If the shortcut
+2. The person prepares the page and signs in if needed. Tell them to click the page and press
+   **Shift twice**, quickly, to start, then Shift twice again to stop and save. If that
    does nothing, they can press Enter in the recorder's terminal instead, once to start and once to stop
    (only when the command runs in an interactive terminal they can type into). Wait for the
    command to finish; do not sign in, solve MFA, or bypass site protections for them.
-3. Report the MP4 path from **Your video is ready** and the JSON path from **Saved the replay plan**. The
+3. Report the MP4 path from **Your video is ready** and the JSON path from **Replay plan**. The
    MP4 is converted to H.264 so it plays everywhere; if the terminal says it kept the AV1 video, pass that
    on. The video captures everything visible in the
    tab; plans and the saved browser session may also contain sensitive information. Advise review before

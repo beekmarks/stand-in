@@ -2,8 +2,9 @@
 // Capture a website tab and optionally replay its recorded actions with visual effects.
 
 import {spawnSync} from 'node:child_process';
-import {existsSync, readdirSync, realpathSync} from 'node:fs';
+import {existsSync, readdirSync, realpathSync, rmSync} from 'node:fs';
 import {mkdir, open, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {homedir, platform} from 'node:os';
 import {basename, dirname, join, relative, resolve} from 'node:path';
@@ -14,7 +15,12 @@ import {pathToFileURL} from 'node:url';
 const MIN_CHROME = 153;
 
 // A problem the person can fix themselves. Printed as a plain message, without a stack trace.
-class UserError extends Error {}
+class UserError extends Error {
+  // `link`: a page that fixes the problem (VS Code offers a button for it).
+  constructor(message, {link} = {}) { super(message); this.link = link; }
+}
+// The person stopped before anything was recorded: not a failure, nothing to report.
+class Cancelled extends UserError {}
 const CRASHED = 'The Chrome tab crashed, usually because it ran out of memory. Very busy pages (videos, animations)' +
   ' are the hardest to record; try a shorter recording, or set "fps": 30 in the plan for replays.';
 
@@ -22,8 +28,8 @@ const CRASHED = 'The Chrome tab crashed, usually because it ran out of memory. V
 // Dependencies are installed with the package.
 // ------------------------------------------------------------------------------------------
 async function loadDeps() {
-  const [pw, cc] = await Promise.all([import('playwright-core'), import('chrome-capture')]);
-  return {chromium: pw.chromium ?? pw.default.chromium, startRecording: cc.startRecording, findChromeBinary: cc.findChromeBinary};
+  const pw = await import('playwright-core');
+  return {chromium: pw.chromium ?? pw.default.chromium};
 }
 
 // ------------------------------------------------------------------------------------------
@@ -57,12 +63,20 @@ function standardChromePaths() {
   }
   return ['/usr/bin/google-chrome-unstable', '/usr/bin/google-chrome-beta', '/usr/bin/google-chrome', '/usr/bin/chromium'];
 }
-async function findChrome(explicit, findChromeBinary) {
+async function findChrome(explicit) {
   const candidates = [];
   if (explicit) candidates.push(explicit);
   if (process.env.CHROME_PATH) candidates.push(process.env.CHROME_PATH);
   candidates.push(...standardChromePaths());
-  try { candidates.push(await findChromeBinary()); } catch {}
+  // Chrome for Testing downloaded by Puppeteer (npx @puppeteer/browsers install chrome@stable).
+  const puppeteer = join(homedir(), '.cache', 'puppeteer', 'chrome');
+  try {
+    for (const e of readdirSync(puppeteer).sort((a, b) => b.localeCompare(a, undefined, {numeric: true}))) {
+      for (const sub of ['chrome-linux64/chrome', 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+        'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'chrome-win64/chrome.exe'])
+        candidates.push(join(puppeteer, e, sub));
+    }
+  } catch {}
   const pwDirs = [process.env.PLAYWRIGHT_BROWSERS_PATH, '/opt/pw-browsers', join(homedir(), '.cache', 'ms-playwright'),
     join(homedir(), 'Library', 'Caches', 'ms-playwright'), process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'ms-playwright')].filter(Boolean);
   for (const dir of pwDirs) {
@@ -85,8 +99,12 @@ async function findChrome(explicit, findChromeBinary) {
     if (major >= MIN_CHROME) return c;
     if (c === explicit) break;
   }
-  die(`Need Chrome ${MIN_CHROME}+ for native tab recording. Checked:\n  ${tried.join('\n  ') || '(nothing found)'}\n` +
-    `Install one (e.g. \`npx @puppeteer/browsers install chrome@beta\`) and pass --chrome PATH or set CHROME_PATH.`);
+  if (explicit && !existsSync(explicit)) throw new UserError(`There is no Chrome at ${explicit}.`);
+  const found = tried.length ? ` (found ${tried.join(', ')})` : '';
+  throw new UserError(tried.length
+    ? `Stand-in needs Google Chrome ${MIN_CHROME} or newer${found}. Update Chrome (Help > About Google Chrome), then try again.`
+    : 'Stand-in needs Google Chrome, which isn\'t installed. Install it from https://www.google.com/chrome/, then try again.',
+  {link: 'https://www.google.com/chrome/'});
 }
 
 // ------------------------------------------------------------------------------------------
@@ -246,9 +264,24 @@ function captureInit() {
   const roleOf = el => el.getAttribute('role') ?? ({A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
     SUMMARY: 'button'}[el.tagName] ?? (el.tagName === 'INPUT' ? ({checkbox: 'checkbox', radio: 'radio', submit: 'button',
     button: 'button', search: 'searchbox', range: 'slider'}[el.type] ?? 'textbox') : null));
+  // Text as screen readers (and Playwright) read it: parts hidden from them with aria-hidden are left out,
+  // such as GitHub's "Issues 5k+ (5k+)", whose name is "Issues (5k+)".
+  const spokenText = el => {
+    if (!el.querySelector?.('[aria-hidden="true"]')) return clean(el.innerText);
+    const parts = [];
+    const walk = node => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) parts.push(child.textContent);
+        else if (child.nodeType === 1 && child.getAttribute('aria-hidden') !== 'true' && !/^(SCRIPT|STYLE|TEMPLATE)$/.test(child.tagName) &&
+          child.checkVisibility?.() !== false) walk(child);
+      }
+    };
+    walk(el);
+    return clean(parts.join(' ').replace(/\s+([)\].,!?:;])/g, '$1').replace(/([(\[])\s+/g, '$1'));
+  };
   // Text shown in a web component's slots belongs to the button inside it, as screen readers (and Playwright) see it.
   const textOf = el => {
-    const own = clean(el.innerText);
+    const own = spokenText(el);
     if (own) return own;
     const slotted = clean([...el.querySelectorAll?.('slot') ?? []].flatMap(s => s.assignedNodes({flatten: true}))
       .map(n => n.textContent).join(' '));
@@ -356,17 +389,23 @@ function captureInit() {
   const DISMISS_NAME = /^(?:x|×|✕|✖|close|dismiss|minimi[sz]e|hide|no,? thanks?|not now|maybe later|skip|got it|ok(?:ay)?|accept(?: all)?(?: cookies)?|i? ?agree|allow(?: all)?(?: cookies)?|reject(?: all)?(?: cookies)?|decline|continue without accepting)[.!]?$/i;
   const DISMISS = {test: s => DISMISS_NAME.test(s) || (s.length <= 30 && /\b(?:close|dismiss)\b/i.test(s))};
   const POPUP = /cookie|consent|gdpr|banner|modal|popup|pop-up|overlay|lightbox|backdrop|interstitial|survey|toast|newsletter|promo|offer|onetrust|didomi|cmp\b/i;
-  const isDismiss = (el, name) => {
-    if (DISMISS.test(clean(name)) || DISMISS.test(clean(el.getAttribute?.('title')))) return true;
-    for (let n = el, i = 0; n && n.nodeType === 1 && i < 8; n = up(n), i++) {
-      const tag = `${n.id} ${typeof n.className === 'string' ? n.className : ''} ${n.getAttribute('aria-label') ?? ''}`;
-      if (n.matches('[role=dialog],[role=alertdialog],dialog,[aria-modal=true]') || POPUP.test(tag)) {
-        const role = roleOf(el) ?? '';
-        // A short button or link in a pop-up, or a click on the pop-up's backdrop, closes it.
-        return (/^(?:button|link)$/.test(role) && clean(name).length <= 30) || !el.matches(INTERACTIVE);
-      }
+  // A pop-up is a dialog, or something that floats over the page (fixed or sticky) and is named like one.
+  // The page itself doesn't count, even when <body> has a class such as "overlay-banner-open".
+  const inPopup = el => {
+    let named = false;
+    for (let n = el, i = 0; n && n.nodeType === 1 && i < 10; n = up(n), i++) {
+      if (/^(BODY|HTML|MAIN)$/.test(n.tagName)) return false;
+      if (n.matches('[role=dialog],[role=alertdialog],dialog,[aria-modal=true]')) return true;
+      named ||= POPUP.test(`${n.id} ${typeof n.className === 'string' ? n.className : ''} ${n.getAttribute('aria-label') ?? ''}`);
+      if (named && /^(fixed|sticky)$/.test(getComputedStyle(n).position)) return true;
     }
     return false;
+  };
+  const isDismiss = (el, name) => {
+    if (DISMISS.test(clean(name)) || DISMISS.test(clean(el.getAttribute?.('title')))) return true;
+    if (!inPopup(el)) return false;
+    // A short button or link in a pop-up, or a click on the pop-up's backdrop, closes it.
+    return (/^(?:button|link)$/.test(roleOf(el) ?? '') && clean(name).length <= 30) || !el.matches(INTERACTIVE);
   };
   const isText = el => el && (el.tagName === 'TEXTAREA' || el.isContentEditable ||
     (el.tagName === 'INPUT' && !['checkbox', 'radio', 'submit', 'button', 'reset', 'image', 'range', 'file', 'color'].includes(el.type)));
@@ -432,6 +471,8 @@ function captureInit() {
   }, {capture: true, passive: true});
 }
 
+const PAUSE_MS = 3000; // longest pause kept from a recording, in the video and in its replay plan
+
 class StepBuilder {
   constructor() {
     this.steps = []; this.typing = null; this.lastT = 0; this.lastWheelT = 0; this.secrets = 0; this.lastSubmit = null;
@@ -469,7 +510,14 @@ class StepBuilder {
       const minMs = Math.max(0, Math.min(15000, Math.round((g - 3000) * 0.5 / 100) * 100));
       this.steps.push({action: 'waitForStable', around: field, ...(minMs ? {minMs} : {}), pauseAfter: 2500,
         note: `captured: you waited ${(g / 1000).toFixed(1)}s for an answer here`});
-    } else this.steps.push({action: 'wait', ms: Math.min(Math.round(g / 100) * 100, 30000)});
+    } else {
+      // Anything else was hesitation, not something the viewer needs to see: keep at most 3 s of it.
+      // (Waits for pages and answers are separate steps and keep their full length.)
+      const ms = Math.round(g / 100) * 100;
+      this.steps.push(ms > PAUSE_MS
+        ? {action: 'wait', ms: PAUSE_MS, note: `captured: you paused ${(g / 1000).toFixed(1)}s here; shortened (raise ms to keep more)`}
+        : {action: 'wait', ms});
+    }
   }
   // Chat boxes often fire one more input event right after Enter (the newline, or the box being cleared).
   // That is part of submitting, not new typing; recording it would ask the question a second time.
@@ -579,7 +627,17 @@ class Actor {
   // Resolve to one visible element, bring it into view smoothly, return its box.
   async acquire(target, timeout) {
     let loc = this.locator(target);
+    // A name with a count or note after the words ("Issues 5k+ (5k+)", "Inbox (3)") may be read differently
+    // on another visit; the words before it ("Issues") also find the element, though a full match is preferred.
+    const words = typeof target === 'object' && target.role && typeof target.name === 'string' && !target.exact && target.nth == null
+      ? /^([^\d(\[]*[^\d(\[\s])\s*[\d(\[]/.exec(target.name)?.[1] : null;
+    const full = loc;
+    if (words && words.length >= 3) {
+      const escaped = words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      loc = full.or(this.locator({...target, name: new RegExp(`^\\s*${escaped}\\b`, 'i')}));
+    }
     await loc.first().waitFor({state: 'visible', timeout});
+    if (loc !== full && await full.first().isVisible().catch(() => false)) loc = full;
     // A role name matches as a substring ("Code" also matches "Codespaces"), so an exact name wins.
     if (typeof target === 'object' && target.role && typeof target.name === 'string' && !target.exact && target.nth == null) {
       const exact = this.locator({...target, exact: true});
@@ -1077,7 +1135,7 @@ function freeName(base, ...files) {
 // Re-encode to H.264 with Chrome's own WebCodecs encoder (hardware where available) and the mediabunny
 // MP4 library, in a hidden Chrome. No ffmpeg needed. If it can't, the AV1 file is kept.
 // ------------------------------------------------------------------------------------------
-async function makePlayable({chromium, chromePath, file}) {
+async function makePlayable({chromium, chromePath, file, trim = false}) {
   // Only this one browser build of mediabunny ships with the extension, so find the file directly.
   const bundle = createRequire(import.meta.url).resolve.paths('mediabunny')
     .map(dir => join(dir, 'mediabunny', 'dist', 'bundles', 'mediabunny.min.mjs')).find(existsSync);
@@ -1088,14 +1146,16 @@ async function makePlayable({chromium, chromePath, file}) {
   let browser, input, output, written = 0, lastShown = 0;
   const progress = p => {
     const pct = Math.floor(p * 100);
-    if (tty) process.stderr.write(`\r[stand-in] Converting the video so it plays everywhere… ${pct}%`);
-    else if (pct >= lastShown + 25) { lastShown = pct - pct % 25; log(`Converting the video so it plays everywhere… ${pct}%`); }
+    if (tty) process.stderr.write(`\r[stand-in] Finishing the video… ${pct}%`);
+    else if (!lastShown) { lastShown = 1; log('Finishing the video…'); }
   };
+  interruption.converting = {file, temporary};
   try {
     input = await open(file, 'r');
     output = await open(temporary, 'w');
     const size = (await input.stat()).size;
-    browser = await chromium.launch({executablePath: chromePath, headless: true});
+    browser = await chromium.launch({executablePath: chromePath, headless: true,
+      handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false});
     const page = await browser.newPage();
     // The page reads the recording and writes the result in pieces: long videos are too big to pass at once.
     await page.route(ORIGIN + '/**', async route => {
@@ -1117,7 +1177,7 @@ async function makePlayable({chromium, chromePath, file}) {
     });
     await page.goto(ORIGIN + '/');
     await page.exposeFunction('__standInProgress', progress);
-    const result = await page.evaluate(async size => {
+    const result = await page.evaluate(async ({size, trim, pauseMs}) => {
       const mb = await import('/mediabunny.mjs');
       const PIECE = 8 << 20;
       const read = async (start, end) => {
@@ -1158,13 +1218,55 @@ async function makePlayable({chromium, chromePath, file}) {
       if (audioOut) output.addAudioTrack(audioOut);
       await output.start();
       const end = (await video.computeDuration()) || 1;
-      const copyVideo = async () => {
-        let shown = 0;
-        for await (const sample of new mb.VideoSampleSink(video).samples()) {
-          await videoOut.add(sample);
-          if (sample.timestamp / end - shown >= 0.01) { shown = sample.timestamp / end; window.__standInProgress(Math.min(0.99, shown)); }
-          sample.close();
+      // Pauses: while the screen doesn't change, nothing new is shown, so those frames are merged into one
+      // that stays up for at most LEAD seconds at the start, PAUSE in the middle and TAIL at the end. The
+      // cursor moving, a page loading or an answer streaming in all count as changes and are kept.
+      // (Not with sound, which would fall out of step.)
+      const LEAD = 0.5, PAUSE = pauseMs / 1000, TAIL = 1.5;
+      const shorten = trim && !audio;
+      const thumb = new OffscreenCanvas(192, 108).getContext('2d', {willReadFrequently: true});
+      let shownThumb = null;
+      const changed = sample => {
+        sample.draw(thumb, 0, 0, 192, 108);
+        const px = thumb.getImageData(0, 0, 192, 108).data;
+        let n = 0;
+        if (shownThumb) {
+          for (let i = 0; i < px.length && n < 3; i += 4)
+            if (Math.abs(px[i] - shownThumb[i]) > 32 || Math.abs(px[i + 1] - shownThumb[i + 1]) > 32 || Math.abs(px[i + 2] - shownThumb[i + 2]) > 32) n++;
         }
+        // A blinking text cursor changes a pixel or two; that alone is not a change.
+        if (!shownThumb || n >= 3) { shownThumb = px; return true; }
+        return false;
+      };
+      let removed = 0;
+      const copyVideo = async () => {
+        let shown = 0, held = null, heldAt = 0, heldFirst = false, offset = 0;
+        for await (const sample of new mb.VideoSampleSink(video).samples()) {
+          const t = sample.timestamp;
+          if (t / end - shown >= 0.01) { shown = t / end; window.__standInProgress(Math.min(0.99, shown)); }
+          if (!shorten) { await videoOut.add(sample); sample.close(); continue; }
+          if (held && !changed(sample)) { sample.close(); continue; }
+          if (!held) changed(sample);
+          else {
+            // The held frame stayed up from heldAt until now; keep at most LEAD or PAUSE seconds of that.
+            const still = t - heldAt, keep = heldFirst ? LEAD : PAUSE;
+            if (still > keep) offset += still - keep;
+            held.setDuration(t - offset - held.timestamp);
+            await videoOut.add(held);
+            held.close();
+          }
+          sample.setTimestamp(t - offset);
+          heldFirst = !held;
+          held = sample; heldAt = t;
+        }
+        if (held) {
+          const still = end - heldAt;
+          held.setDuration(Math.max(1 / 60, Math.min(still, TAIL)));
+          offset += Math.max(0, still - TAIL);
+          await videoOut.add(held);
+          held.close();
+        }
+        removed = offset;
         videoOut.close();
       };
       const copyAudio = async () => {
@@ -1174,32 +1276,170 @@ async function makePlayable({chromium, chromePath, file}) {
       await Promise.all([copyVideo(), audioOut && copyAudio()]);
       await output.finalize();
       window.__standInProgress(1);
-      return {ok: true};
-    }, size);
+      return {ok: true, duration: end, removed};
+    }, {size, trim, pauseMs: PAUSE_MS});
     if (tty) process.stderr.write('\n');
     if (!result.ok || !written) return {ok: false, reason: result.error ?? 'the converted video was empty'};
     await output.close(); output = null;
     await input.close(); input = null;
     await rename(temporary, file);
-    return {ok: true};
+    return {ok: true, duration: result.duration, removed: result.removed};
   } catch (error) {
     if (tty) process.stderr.write('\n');
     return {ok: false, reason: explainError(error)};
   } finally {
+    interruption.converting = null;
     await browser?.close().catch(() => {});
     await input?.close().catch(() => {});
     if (output) { await output.close().catch(() => {}); await rm(temporary, {force: true}).catch(() => {}); }
   }
 }
-async function finishVideo({chromium, chromePath, file, convert}) {
-  if (!convert) return;
+// Returns a note about the video's length for the final message.
+async function finishVideo({chromium, chromePath, file, convert, trim}) {
+  if (!convert) return '';
   const t0 = Date.now();
-  const result = await makePlayable({chromium, chromePath, file});
+  const result = await makePlayable({chromium, chromePath, file, trim});
   if (!result.ok) {
     log(`Kept the original AV1 video (${result.reason}). It plays in Chrome, Edge, VLC and recent Macs;` +
       ' older players such as QuickTime on Intel Macs may not open it.');
-  } else if (process.env.STAND_IN_DEBUG) log(`Converted to H.264 in ${((Date.now() - t0) / 1000).toFixed(1)} s.`);
+    return '';
+  }
+  if (process.env.STAND_IN_DEBUG) log(`Converted to H.264 in ${((Date.now() - t0) / 1000).toFixed(1)} s.`);
+  return result.removed >= 1 ? ` (${clock(result.duration - result.removed)}; pauses shortened from ${clock(result.duration)})`
+    : ` (${clock(result.duration)})`;
 }
+// ------------------------------------------------------------------------------------------
+// Recording straight to disk. Chrome writes the recording as a fragmented MP4 while it records, and
+// Stand-in copies it into the video file every quarter second. Whatever happens (the tab or Chrome is
+// closed, the tab crashes, Ctrl+C), the video up to that moment is already in the file.
+// ------------------------------------------------------------------------------------------
+async function recordToFile(page, {file, frameRate, maxWidth, maxHeight, audio}) {
+  await mkdir(dirname(file), {recursive: true});
+  const out = await open(file, 'wx');
+  let session, stream;
+  try {
+    session = await page.context().newCDPSession(page);
+    ({stream} = await session.send('Page.startScreenRecording', {frameRate, maxWidth, maxHeight, audio}));
+  } catch (error) {
+    await out.close().catch(() => {});
+    await rm(file, {force: true}).catch(() => {});
+    await session?.detach().catch(() => {});
+    throw error;
+  }
+  const startedAt = Date.now();
+  let stopping = false, closed = false, lost = null, bytes = 0;
+  const read = async () => {
+    const chunk = await session.send('IO.read', {handle: stream, size: 4 << 20});
+    const data = Buffer.from(chunk.data, chunk.base64Encoded ? 'base64' : 'utf8');
+    if (data.length && !closed) { await out.write(data); bytes += data.length; }
+    return {data, eof: chunk.eof};
+  };
+  // "eof" while recording only means "nothing new yet"; Chrome adds a piece every few seconds, and a read
+  // before the first piece fails. Only a closed tab or browser ends the copying early.
+  const gone = error => /has been closed|detached|crashed|No target with given id|Target closed/i.test(error.message);
+  const copying = (async () => {
+    while (!stopping) {
+      try { if (!(await read()).data.length) await sleep(250); }
+      catch (error) {
+        if (gone(error)) { lost = error; if (process.env.STAND_IN_DEBUG) log(`Recording copy stopped: ${error.message}`); return; }
+        await sleep(250);
+      }
+    }
+  })();
+  let finished;
+  return {
+    file, startedAt,
+    // `abandon`: the tab is gone or not answering, so keep what is already saved instead of asking Chrome.
+    stop({abandon = false} = {}) {
+      finished ??= (async () => {
+        stopping = true;
+        await copying;
+        if (!abandon && !lost) {
+          // Chrome usually finishes within a few seconds; a tab that stopped answering must not hang Stand-in.
+          let giveUp, timedOut = false;
+          const finishing = (async () => {
+            await session.send('Page.stopScreenRecording');
+            // Read until Chrome says the file is complete, then once more in case a last piece follows.
+            for (let quiet = 0, failures = 0; quiet < 2 && !timedOut;) {
+              let chunk;
+              try { chunk = await read(); failures = 0; }
+              catch (error) { if (gone(error) || ++failures > 40) throw error; await sleep(250); continue; }
+              if (chunk.eof && !chunk.data.length) { quiet++; if (quiet < 2) await sleep(150); } else quiet = 0;
+            }
+            await session.send('IO.close', {handle: stream}).catch(() => {});
+          })();
+          finishing.catch(() => {});
+          const limit = new Promise((_, reject) => {
+            giveUp = setTimeout(() => { timedOut = true; reject(new Error('Chrome did not finish the video in time')); }, 60000);
+          });
+          try { await Promise.race([limit, finishing]); }
+          catch (error) { lost = error; }
+          finally { clearTimeout(giveUp); }
+          // Let a read already under way finish before the file closes.
+          if (timedOut) await Promise.race([finishing.catch(() => {}), sleep(2000)]);
+        }
+        await session.detach().catch(() => {});
+        closed = true;
+        await out.close();
+        const complete = !abandon && !lost;
+        // A recording cut off mid-piece ends with a partial piece; drop it so the file plays.
+        const size = complete ? bytes : await keepWholeFragments(file);
+        if (!size) await rm(file, {force: true}).catch(() => {});
+        return {file, size, complete, seconds: (Date.now() - startedAt) / 1000};
+      })();
+      return finished;
+    },
+  };
+}
+
+// Truncates a fragmented MP4 after its last complete media fragment. Returns the new size (0 if no video).
+async function keepWholeFragments(file) {
+  const fh = await open(file, 'r+');
+  try {
+    const {size} = await fh.stat();
+    const header = Buffer.alloc(16);
+    let at = 0, keep = 0, sawMoof = false;
+    while (at + 8 <= size) {
+      await fh.read(header, 0, 16, at);
+      let length = header.readUInt32BE(0);
+      const type = header.toString('latin1', 4, 8);
+      if (length === 1) length = Number(header.readBigUInt64BE(8));
+      else if (length === 0) length = size - at;
+      if (length < 8 || at + length > size) break;
+      if (type === 'moof') sawMoof = true;
+      if (type === 'mdat' && sawMoof) keep = at + length;
+      at += length;
+    }
+    await fh.truncate(keep);
+    return keep;
+  } finally { await fh.close(); }
+}
+
+const clock = seconds => { const t = Math.round(seconds); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+
+// Ctrl+C, VS Code's "Terminate Task" and closing the terminal all come here. While a video is being made,
+// the current phase decides (stop and save); otherwise Chrome is closed and Stand-in exits. Pressing
+// Ctrl+C again always exits at once; anything already recorded is in the video file.
+const interruption = {handler: null, cleanup: async () => {}, count: 0, converting: null};
+const REASONS = {SIGINT: 'Stopped with Ctrl+C.', SIGTERM: 'Stand-in was asked to stop.', SIGHUP: 'The terminal was closed.'};
+function interrupted(signal) {
+  const exit = () => process.exit(signal === 'SIGINT' ? 130 : 143);
+  if (++interruption.count > 1 || !interruption.handler) {
+    if (process.stderr.isTTY) process.stderr.write('\n');
+    if (interruption.converting) {
+      rmSync(interruption.converting.temporary, {force: true});
+      log(`Stopped before the video was finished. The original recording is kept: ${shown(interruption.converting.file)}`);
+    } else if (interruption.count === 1) log('Stopping…');
+    Promise.race([interruption.cleanup(), sleep(5000)]).catch(() => {}).finally(exit);
+    return;
+  }
+  interruption.handler(REASONS[signal]);
+}
+function listenForInterruptions(cleanup) {
+  interruption.cleanup = cleanup;
+  for (const signal of Object.keys(REASONS)) process.on(signal, () => interrupted(signal));
+}
+
 // Lets the VS Code extension show "your video is ready" when the terminal task ends.
 async function writeResult(result) {
   const file = process.env.STAND_IN_RESULT;
@@ -1230,22 +1470,46 @@ function normalisePlan(raw, urlOverride) {
   return plan;
 }
 
+// Node 22 is what VS Code itself has run on since early 2026, so the extension can use VS Code's own.
+const MIN_NODE = 22;
 function requireSupportedNode(version) {
-  const [major, minor] = version.split('.').map(Number);
-  if (major < 24 || (major === 24 && minor < 11))
-    throw new UserError(`Node.js 24.11 or newer is required (found ${version}). Install or select a supported version, then fully quit and reopen VS Code.`);
+  const [major] = version.split('.').map(Number);
+  if (major < MIN_NODE)
+    throw new UserError(`Stand-in needs Node.js ${MIN_NODE} or newer (found ${version}). Install it from https://nodejs.org, then try again.`,
+      {link: 'https://nodejs.org/en/download'});
 }
 
-async function confirmSignedInReplay(plan, approved) {
-  if (!(plan.signedIn || plan.profileDir) || approved) return;
-  if (!process.stdin.isTTY || !process.stdout.isTTY)
-    die('Signed-in replay needs explicit approval. Review the plan for actions that change real data, then rerun with --confirm-signed-in.');
-  const prompt = createInterface({input: process.stdin, output: process.stdout});
-  try {
-    const answer = await prompt.question('Replay uses your saved browser session, so on sites where you are signed in it acts as you\n' +
-      'and can make real changes. Review the plan first. Continue? [y/N] ');
-    if (!/^(y|yes)$/i.test(answer.trim())) die('Signed-in replay cancelled.');
-  } finally { prompt.close(); }
+// Replays use the saved browser session, so they can act as the person on signed-in sites. A plan they
+// recorded themselves is trusted; one that is new to this session or has changed since (edited, or from
+// someone else) is shown to them once. Approvals are kept next to the session, by the plan's contents.
+const planDigest = text => createHash('sha256').update(text).digest('hex');
+function approvalsFile(profileDir) { return join(dirname(profileDir), 'approved-plans.json'); }
+async function readApprovals(profileDir) {
+  try { return JSON.parse(await readFile(approvalsFile(profileDir), 'utf8')); } catch { return {}; }
+}
+async function approvePlan(profileDir, text) {
+  const approvals = await readApprovals(profileDir);
+  approvals[planDigest(text)] = new Date().toISOString();
+  await mkdir(dirname(approvalsFile(profileDir)), {recursive: true});
+  await writeFile(approvalsFile(profileDir), JSON.stringify(approvals, null, 2) + '\n');
+}
+async function confirmSignedInReplay(plan, planText, approved) {
+  if (!(plan.signedIn || plan.profileDir)) return;
+  if (plan.profileDir && (await readApprovals(plan.profileDir))[planDigest(planText)]) return;
+  if (!approved) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY)
+      throw new UserError('This plan is new or has changed since it was recorded, and replays can act as you on signed-in sites.\n' +
+        '  Review it for actions that change real data, then rerun with --confirm-signed-in (explicit approval).');
+    const prompt = createInterface({input: process.stdin, output: process.stdout});
+    try {
+      const answer = await prompt.question('This plan is new or has changed since it was recorded. Replays use your saved browser\n' +
+        'session, so on sites where you are signed in it acts as you and can make real changes.\n' +
+        'Review the plan first. Replay it? [y/N] ');
+      if (!/^(y|yes)$/i.test(answer.trim())) throw new Cancelled('Replay cancelled.');
+    } finally { prompt.close(); }
+  }
+  // Asked once: the same plan replays without asking again.
+  if (plan.profileDir) await approvePlan(plan.profileDir, planText).catch(() => {});
 }
 
 function liveShortcutInit() {
@@ -1272,17 +1536,16 @@ function liveShortcutInit() {
       const title = document.createElement('strong');
       title.textContent = 'Stand-in live recording';
       const shortcut = document.createElement('strong');
-      shortcut.textContent = 'Ctrl+Shift+9';
+      shortcut.textContent = 'press Shift twice';
       const dismiss = document.createElement('button');
       dismiss.type = 'button';
       dismiss.textContent = 'Dismiss';
       Object.assign(dismiss.style, {pointerEvents: 'auto', marginTop: '8px'});
       dismiss.addEventListener('click', window.__standInHideLiveHelp);
-      panel.append(title, document.createElement('br'), 'Sign in first if needed. With this page focused, press ',
-        shortcut, ' to start. Wait for the terminal to say recording, then press it again to stop and save. ' +
-        'If the shortcut does nothing, press Enter in the terminal instead. ' +
-        'Everything visible in this tab is recorded. On Mac, use Control, not Command. ' +
-        'This message disappears before recording.', document.createElement('br'), dismiss);
+      panel.append(title, document.createElement('br'), 'Sign in first if needed. Then ',
+        shortcut, ', quickly, to start. Do it again to stop and save. ' +
+        'If that does nothing, click the page and try again, or press Enter in the terminal. ' +
+        'Everything visible in this tab is recorded. This message disappears before recording.', document.createElement('br'), dismiss);
       root.append(panel);
       document.documentElement.append(host);
     };
@@ -1291,34 +1554,92 @@ function liveShortcutInit() {
     show();
     document.addEventListener('DOMContentLoaded', show, {once: true});
   }
+  // Start and stop: press Shift twice, quickly, with nothing in between. Shift on its own types nothing,
+  // so it never clashes with the site. A capital letter puts another key between the presses, and
+  // Shift-clicking puts a click between them. Ctrl+Shift+9, the original shortcut, still works.
+  const toggle = () =>
+    window.__standInLiveToggle().catch(error => console.error(`Stand-in recording control failed: ${error.message}`));
+  const DOUBLE_SHIFT_MS = 400;
+  let lastShift = 0;
   addEventListener('keydown', e => {
-    if (!e.isTrusted || e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'Digit9') return;
+    if (!e.isTrusted) return;
+    if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.repeat) { lastShift = 0; return; }
+      const now = e.timeStamp;
+      if (lastShift && now - lastShift <= DOUBLE_SHIFT_MS) {
+        lastShift = 0;
+        toggle();
+      } else {
+        lastShift = now;
+      }
+      return;
+    }
+    lastShift = 0;
+    if (e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'Digit9') return;
     e.preventDefault();
     e.stopImmediatePropagation();
-    window.__standInLiveToggle().catch(error => console.error(`Stand-in recording control failed: ${error.message}`));
+    toggle();
   }, true);
+  for (const type of ['pointerdown', 'wheel']) addEventListener(type, () => { lastShift = 0; }, true);
 }
 
-async function liveRecording({ctx, page, plan, videoPath, startRecording, capture}) {
+async function liveRecording({ctx, page, plan, videoPath, startRecording = recordToFile, capture}) {
   let state = 'ready', recording;
   let resolveDone, rejectDone;
   const done = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
   // The tab can close before the caller starts awaiting completion.
   done.catch(() => {});
-  page.once('close', () => rejectDone(new UserError(state === 'ready'
-    ? 'The recorded tab closed before recording started.'
-    : 'The recorded tab closed before the recording could be saved; press Ctrl+Shift+9 before closing it.')));
-  page.once('crash', () => rejectDone(new UserError(CRASHED)));
-  ctx.once('close', () => rejectDone(new UserError(state === 'ready'
-    ? 'Chrome was closed before recording started.' : 'Chrome closed before the recording was saved.')));
+  // While recording, the tab's title shows a red dot and the time ("● 0:42 · Wikipedia"). It's where the
+  // person is looking, and the title bar isn't part of the video.
+  let ticker;
+  const TITLE = /^● \d+:\d\d · /;
+  const setTitle = label => page.evaluate(([label, pattern]) => {
+    const own = document.title.replace(new RegExp(pattern), '');
+    document.title = label ? `${label}${own}` : own;
+  }, [label, TITLE.source]).catch(() => {});
+  const showTimer = startedAt => {
+    const tick = () => setTitle(`● ${clock((Date.now() - startedAt) / 1000)} · `);
+    tick();
+    ticker = setInterval(tick, 1000);
+  };
+  const hideTimer = () => { clearInterval(ticker); return state === 'stopping' && !page.isClosed() ? setTitle('') : undefined; };
+  // Stopping, however it happens, saves everything recorded so far. `cutShort` says why it ended early.
+  const save = async ({abandon = false, cutShort} = {}) => {
+    state = 'stopping';
+    hideTimer();
+    log(cutShort ? `${cutShort} Saving what was recorded…` : 'Saving…');
+    try {
+      capture?.disarm();
+      const video = await recording.stop({abandon});
+      if (!video.size) {
+        throw new UserError(cutShort ? `${cutShort} It was too soon for any video to be saved.` : 'Chrome returned an empty recording.');
+      }
+      if (capture) await capture.finish();
+      state = 'saved';
+      resolveDone({video: videoPath, cutShort});
+      return state;
+    } catch (error) {
+      state = 'failed';
+      rejectDone(error);
+      throw error;
+    }
+  };
+  // Closing the tab or Chrome while recording means "stop and save", not "throw it away".
+  const ended = (whileReady, cutShort, abandon) => () => {
+    if (state === 'ready' || state === 'starting') rejectDone(new (whileReady === CRASHED ? UserError : Cancelled)(whileReady));
+    else if (state === 'recording') save({abandon, cutShort}).catch(() => {});
+  };
+  page.once('close', ended('The recorded tab was closed before recording started; nothing was recorded.', 'The recorded tab was closed.', true));
+  page.once('crash', ended(CRASHED, 'The Chrome tab crashed, usually from running out of memory.', true));
+  ctx.once('close', ended('Chrome was closed before recording started; nothing was recorded.', 'Chrome was closed.', true));
   // Only the starting tab is recorded. Say so when the site opens another one, or the video seems to freeze.
   ctx.on('page', other => {
     if (state === 'recording' && other !== page)
       log('A new tab opened. Only the original tab is being recorded; close the new tab or switch back to keep it in the video.');
   });
   await ctx.exposeBinding('__standInLiveState', ({page: source}) => source === page ? state : 'unavailable');
-  // One state machine for both controls: the shortcut in the page and Enter in the terminal.
-  const toggle = async () => {
+  // One state machine for every control: the shortcut in the page, Enter in the terminal, and Ctrl+C.
+  const toggle = async ({cutShort} = {}) => {
     if (state === 'ready') {
       state = 'starting';
       try {
@@ -1328,42 +1649,27 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording, captur
           requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
         }));
         const startUrl = page.url();
-        recording = await startRecording(page, {
+        recording = await startRecording(page, {file: videoPath,
           frameRate: plan.fps, maxWidth: plan.viewport.width, maxHeight: plan.viewport.height, audio: !!plan.audio,
         });
         capture?.arm(startUrl);
       } catch (error) {
         state = 'ready';
-        log(`Could not start recording: ${error.message}`);
+        log(`Could not start recording: ${error.code === 'EEXIST' ? `${videoPath} already exists.` : error.message}`);
         try { await page.evaluate(() => window.__standInShowLiveHelp(true)); }
-        catch { log('Could not restore the on-page shortcut instructions; see the terminal for the shortcut.'); }
+        catch { log('Could not show the instructions in the page again. Press Shift twice in the page to start, or Enter here.'); }
         throw error;
       }
       state = 'recording';
-      log(`Recording this tab. Press Ctrl+Shift+9 again to stop and save${process.stdin.isTTY ? ' (or press Enter in this terminal)' : ''}.`);
+      showTimer(Date.now());
+      log(`Recording this tab. Press Shift twice again${process.stdin.isTTY ? ' (or Enter here)' : ''} to stop and save.`);
       return state;
     }
     if (state !== 'recording') {
       log('Recording is already starting or stopping; wait for the terminal status.');
       throw new Error('Recording is already starting or stopping.');
     }
-    state = 'stopping';
-    log('Recording stopped. Saving…');
-    try {
-      capture?.disarm();
-      const video = await recording.stop();
-      if (!video.length) throw new Error('Chrome returned an empty recording.');
-      await mkdir(dirname(videoPath), {recursive: true});
-      await writeFile(videoPath, video, {flag: 'wx'});
-      if (capture) await capture.finish();
-      state = 'saved';
-      resolveDone();
-      return state;
-    } catch (error) {
-      state = 'failed';
-      rejectDone(error);
-      throw error;
-    }
+    return save({cutShort});
   };
   await ctx.exposeBinding('__standInLiveToggle', async ({page: source}) => {
     if (source !== page) {
@@ -1373,20 +1679,33 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording, captur
     return toggle();
   });
   await ctx.addInitScript(liveShortcutInit);
-  return {done, toggle, state: () => state};
+  // Ctrl+C (or the terminal closing): save if recording, otherwise just stop.
+  const interrupt = cutShort => {
+    if (state === 'recording') return save({cutShort});
+    if (state === 'ready') rejectDone(new Cancelled('Stopped before recording started; nothing was recorded.'));
+    else log('Still saving the video; press Ctrl+C again to quit anyway.');
+    return Promise.resolve(state);
+  };
+  return {done, toggle, interrupt, state: () => state};
 }
 
 // Lets people start and stop from the terminal (press Enter) when the page shortcut doesn't reach Chrome,
 // for example because the page isn't focused. Only used when the terminal is interactive.
-function terminalControl({page, toggle}) {
-  if (!process.stdin.isTTY) return {close() {}};
-  const rl = createInterface({input: process.stdin});
-  rl.on('line', () => {
-    page.bringToFront()
-      .then(toggle)
-      .catch(error => log(`Could not change recording: ${error.message}`));
-  });
-  return {close() { rl.close(); }};
+// Enter in the terminal starts and stops recording; Ctrl+C saves and stops (see `interrupted`).
+function terminalControl({page, toggle, interrupt}) {
+  interruption.handler = why => { interrupt(why).catch(() => {}); };
+  let rl;
+  if (process.stdin.isTTY) {
+    rl = createInterface({input: process.stdin});
+    rl.on('line', () => {
+      page.bringToFront()
+        .then(() => toggle())
+        .catch(error => log(`Could not change recording: ${error.message}`));
+    });
+    // With the terminal in this mode, Ctrl+C arrives here instead of as a signal.
+    rl.on('SIGINT', () => interrupted('SIGINT'));
+  }
+  return {close() { rl?.close(); interruption.handler = null; }};
 }
 
 async function liveCapture({ctx, page, plan, planPath, profileDir}) {
@@ -1410,8 +1729,11 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
       const raw = {url: startUrl, viewport: plan.viewport, fps: plan.fps,
         profileDir: relative(dirname(planPath), profileDir).split('\\').join('/'), steps};
       await mkdir(dirname(planPath), {recursive: true});
-      await writeFile(planPath, JSON.stringify(raw, null, 2) + '\n', {flag: 'wx'});
-      log(`Saved the replay plan: ${shown(planPath)}${error ? ' (incomplete)' : ''}`);
+      const text = JSON.stringify(raw, null, 2) + '\n';
+      await writeFile(planPath, text, {flag: 'wx'});
+      // You recorded this yourself, so replaying it as recorded needs no confirmation.
+      if (profileDir) await approvePlan(profileDir, text).catch(() => {});
+      if (error) log(`Saved an incomplete replay plan: ${shown(planPath)}`);
       if (builder.secrets) log('Password input was not captured; replace SET-ME in the replay plan if needed.');
       if (error) throw new Error('The video was saved, but some actions could not be captured. Review the incomplete plan.');
     },
@@ -1458,7 +1780,7 @@ Options:
   --chrome PATH          Use this Chrome (version ${MIN_CHROME} or newer)
   --debug                Show technical details when something goes wrong
 
-Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in the terminal.`);
+Press Shift twice, quickly, in the page to start and stop recording, or press Enter in the terminal.`);
     return;
   }
   requireSupportedNode(process.versions.node);
@@ -1490,7 +1812,7 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
     plan = normalisePlan(await loadPlan(planPath));
     if (plan.steps.some(s => [s.text, s.value, s.label].some(v => typeof v === 'string' && v.startsWith('SET-ME:'))))
       throw new UserError('The plan contains uncaptured password input. Review it and replace SET-ME before replay.');
-    await confirmSignedInReplay(plan, options['confirm-signed-in']);
+    await confirmSignedInReplay(plan, await readFile(planPath, 'utf8'), options['confirm-signed-in']);
     if (plan.profileDir && !existsSync(plan.profileDir))
       throw new UserError(`The browser session ${plan.profileDir} is missing; record a new demo or update the plan.`);
     if (options.output) videoPath = resolve(options.output);
@@ -1518,16 +1840,22 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
   if (!/\.mp4$/i.test(videoPath)) throw new UserError('Video output must end in .mp4.');
   if (!options.rehearse && existsSync(videoPath)) throw new UserError(`Video already exists: ${videoPath}. Choose a new output path.`);
 
-  const {chromium, startRecording, findChromeBinary} = await loadDeps();
-  const chromePath = await findChrome(options.chrome ?? plan.chrome, findChromeBinary);
+  const {chromium} = await loadDeps();
+  const chromePath = await findChrome(options.chrome ?? plan.chrome);
   const {width: W, height: H} = plan.viewport;
   const proxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+  // Stand-in handles Ctrl+C itself (to save the video first); Playwright would otherwise close Chrome and exit.
   const launch = {executablePath: chromePath, headless: !!options.headless,
+    handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
     viewport: {width: W, height: H}, deviceScaleFactor: 1,
     args: [`--window-size=${W},${H}`, '--disable-background-timer-throttling', '--disable-renderer-backgrounding'],
     proxy: proxy ? {server: proxy, bypass: process.env.NO_PROXY ?? process.env.no_proxy} : undefined};
   const convert = !options.av1;
   let browser, ctx, saved, failure;
+  listenForInterruptions(async () => {
+    if (browser) await browser.close().catch(() => {});
+    else if (ctx) await ctx.close().catch(() => {});
+  });
   try {
     if (plan.profileDir) {
       ctx = await chromium.launchPersistentContext(plan.profileDir, launch).catch(error => {
@@ -1554,7 +1882,7 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
     await ctx.addInitScript(overlayInit, plan.overlay);
     if (!replay) {
       const capture = await liveCapture({ctx, page, plan, planPath, profileDir: plan.profileDir});
-      const {done, toggle} = await liveRecording({ctx, page, plan, videoPath, startRecording, capture});
+      const {done, toggle, interrupt} = await liveRecording({ctx, page, plan, videoPath, capture});
       page.on('dialog', d => log(`Browser ${d.type()} dialog: respond in Chrome.`));
       try {
         await page.goto(plan.url, {waitUntil: 'domcontentloaded', timeout: 45000});
@@ -1566,12 +1894,12 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
       // Chrome opens with the address bar focused, where the shortcut can't be seen. Focus the page.
       await page.bringToFront().catch(() => {});
       await page.evaluate(() => { window.focus(); document.activeElement?.blur?.(); }).catch(() => {});
-      const terminal = terminalControl({page, toggle});
-      log('Get the page ready (sign in if needed). Then press Ctrl+Shift+9 in the page to start, and again to stop.');
-      if (process.stdin.isTTY) log('If the shortcut does nothing, click in this terminal and press Enter instead (once to start, once to stop).');
-      log('Everything in this tab is recorded. The video, replay plan and saved browser session may contain sensitive information.');
-      try { await done; } finally { terminal.close(); }
-      saved = {video: videoPath, plan: planPath};
+      const terminal = terminalControl({page, toggle, interrupt});
+      log(`Ready. Press Shift twice, quickly, in the page to start recording${process.stdin.isTTY ? ' (or press Enter here)' : ''}.`);
+      log('Everything in this tab is recorded; the video, plan and .sessions folder can contain private information.');
+      let result;
+      try { result = await done; } finally { terminal.close(); }
+      saved = {video: videoPath, plan: planPath, cutShort: result?.cutShort, trim: true};
       return;
     }
     if (plan.zoom && plan.zoom !== 1)
@@ -1586,17 +1914,19 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
       if (error.name !== 'TimeoutError') throw new UserError(explainNavigation(error, plan.url));
       log('The page is slow to finish loading; continuing anyway.');
     }
-    // A crashed tab never answers again; stop waiting for it and say what happened.
-    let crashed, tabCrashed = false;
-    const crash = new Promise((_, reject) => { crashed = reject; });
+    // A crashed tab never answers again, and Ctrl+C means "stop here": either way, stop waiting and keep the video.
+    let stopReplay, tabCrashed = false;
+    const crash = new Promise((_, reject) => { stopReplay = reject; });
     crash.catch(() => {});
-    page.once('crash', () => { tabCrashed = true; crashed(new UserError(CRASHED)); });
+    page.once('crash', () => { tabCrashed = true; stopReplay(new UserError(CRASHED)); });
+    interruption.handler = why => stopReplay(new UserError(why));
+    const stopListening = () => { interruption.handler = null; };
     const actor = new Actor(page, plan);
     await actor.settle();
     let recording;
     if (!options.rehearse) {
       await page.mouse.move(actor.mouse.x, actor.mouse.y);
-      recording = await startRecording(page, {frameRate: plan.fps, maxWidth: W, maxHeight: H, audio: !!plan.audio});
+      recording = await recordToFile(page, {file: videoPath, frameRate: plan.fps, maxWidth: W, maxHeight: H, audio: !!plan.audio});
       await page.waitForTimeout(plan.leadInMs);
     }
     const total = plan.steps.length, width = String(total).length;
@@ -1614,7 +1944,7 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
             await actor.wait(step.pauseAfter ?? actor.defaultPauseAfter(step));
           })()]);
         } catch (error) {
-          if (error.message === CRASHED) throw error;
+          if (error instanceof UserError && !step.optional) throw error; // crashed or stopped
           const why = explainError(error, {...step, timeout});
           if (step.optional) { log(`${' '.repeat(width * 2 + 3)}skipped (optional): ${why}`); continue; }
           const location = shown(planPath);
@@ -1625,22 +1955,18 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
             '  or add "optional": true to skip it when it is missing. Try it without recording: add --rehearse.');
         }
       }
-      if (recording) await page.waitForTimeout(plan.tailMs);
+      if (recording) await Promise.race([crash, page.waitForTimeout(plan.tailMs)]);
     } catch (error) {
       await sleep(300); // a crash is reported just after the error it causes
       failure = tabCrashed ? new UserError(CRASHED) : error;
-    }
-    if (recording && !tabCrashed) {
-      // Chrome normally hands the video over at once; don't wait forever on a tab that has stopped answering.
-      let timer;
-      const video = await Promise.race([recording.stop(), new Promise(r => { timer = setTimeout(() => r(null), 60000); })])
-        .finally(() => clearTimeout(timer));
-      if (!video) throw failure ?? new UserError('Chrome did not hand over the replay video. Try again.');
-      if (!video.length) throw new Error('Chrome returned an empty replay recording.');
-      const target = failure ? videoPath.replace(/\.mp4$/i, '-incomplete.mp4') : videoPath;
-      await mkdir(dirname(target), {recursive: true});
-      await writeFile(target, video, {flag: 'wx'});
-      saved = {video: target, plan: planPath, incomplete: !!failure};
+    } finally { stopListening(); }
+    if (recording) {
+      const video = await recording.stop({abandon: tabCrashed});
+      if (video.size) {
+        const target = failure ? videoPath.replace(/\.mp4$/i, '-incomplete.mp4') : videoPath;
+        if (target !== videoPath) await rename(videoPath, target);
+        saved = {video: target, plan: planPath, incomplete: !!failure};
+      } else if (!failure) throw new Error('Chrome returned an empty replay recording.');
     }
     if (options.rehearse && !failure) log('Rehearsal passed: every step worked.');
   } finally {
@@ -1648,20 +1974,22 @@ Press Ctrl+Shift+9 in the page to start and stop recording, or press Enter in th
     else if (ctx) await ctx.close().catch(() => {});
     // Chrome has closed; now make the video play everywhere and say where it is.
     if (saved?.video && existsSync(saved.video)) {
-      await finishVideo({chromium, chromePath, file: saved.video, convert});
+      const length = await finishVideo({chromium, chromePath, file: saved.video, convert, trim: saved.trim});
+      if (saved.trim && saved.plan && existsSync(saved.plan)) log(`Replay plan: ${shown(saved.plan)}`);
       if (saved.incomplete) log(`Saved what was recorded before the problem: ${shown(saved.video)}`);
-      else log(`Your video is ready: ${shown(saved.video)}`);
+      else log(`Your video is ready: ${shown(saved.video)}${length}`);
       await writeResult({ok: !failure, video: saved.video, plan: saved.plan, error: failure?.message});
     }
   }
   if (failure) throw failure;
 }
 
-export {Actor, captureInit, findChrome, liveCapture, liveRecording, makePlayable, requireSupportedNode, StepBuilder};
+export {Actor, captureInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
   quickMain().catch(async error => {
-    await writeResult({ok: false, error: error.message});
+    if (error instanceof Cancelled) { log(error.message); process.exit(0); }
+    await writeResult({ok: false, error: error.message, link: error.link});
     if (error instanceof UserError) die(error.message);
     // Something unexpected: keep the message short, with details on request.
     if (process.env.STAND_IN_DEBUG) die(error.stack ?? String(error));

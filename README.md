@@ -1,207 +1,173 @@
 # Stand-in
 
-Record a website demo with one shortcut, then **replay it later as a polished video**. Press
-Control+Shift+9, do your demo, and press it again: Stand-in saves an MP4 and an editable replay plan
-of what you did. Replay that plan whenever you need the video again, after the site changes or with
-captions, highlights and a smooth cursor added, and it waits for streamed AI assistant answers to
-finish before moving on.
+**Turn a website walkthrough into a video you can share, in one take.** Open a site, press
+Shift twice, show what you want to show, and press Shift twice again. A few seconds later you have a
+finished MP4, with no editing, exporting or converting.
 
-![A replay of the bundled sample plan: a caption, a highlighted link, a question typed into a chat assistant, and the replay waiting for the streamed answer](docs/demo.gif)
+![An example video: a caption appears, a link is highlighted, a question is typed into a chat assistant, and the answer appears](docs/demo.gif)
 
-*A replay of the bundled sample plan, [`demos/sample/assistant-tour.json`](demos/sample/assistant-tour.json),
-on a fictional website (shown at 1.5× speed).*
+*An example video made with Stand-in, showing a chat assistant on a made-up website (sped up 1.5×). The
+captions and highlights were added afterwards; see [Make it again, or polish it](#make-it-again-or-polish-it).*
 
-## Choose how to use Stand-in
+## What you get
 
-1. **VS Code extension:** Record yourself using a menu command. This is the simplest option without
-   an assistant. Follow the [setup below](#1-set-up-once).
-2. **Copilot skill:** Ask an assistant to record your requested actions or start a manual recording.
-   The extension includes the skill, or you can
-   [install the standalone skill](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension)
-   without the extension. The standalone skill's discovery in VS Code has not yet been verified.
-3. **Command line:** Run the recorder directly from a source checkout. See
-   [command-line instructions](#command-line-from-source).
+Every time you stop recording, Stand-in gives you:
 
-All options require Node.js and Chrome. The skill also requires a compatible Copilot setup.
-The rest of the first-time guide below uses the VS Code extension.
+- **A video that's ready to share.** A standard MP4 that plays in QuickTime (including on Intel Macs),
+  Windows, PowerPoint, Teams, Slack and video editors. It's named after the site and the time, such as
+  `wikipedia.org-2026-11-22-14-05.mp4`, and VS Code offers to open it.
+- **Without the dead air.** Pauses where nothing on screen changes are shortened to at most 3 seconds,
+  and the wait before your first action and after your last is trimmed. Anything that moves is kept:
+  the pointer, pages loading, an answer appearing.
+- **Even if something goes wrong.** The video is saved while you record. If you close the tab or Chrome,
+  press Ctrl+C, or Chrome crashes before you stop, you still get everything up to that moment.
+- **A record of your steps, so you can make the video again.** Stand-in also saves a list of the
+  clicks and typing in your demo, called a replay plan, in the `demos` folder. Later, it can repeat
+  those steps and record a fresh video, for example after the website changes, or with captions,
+  highlights and a smooth cursor added. See [Make it again, or polish it](#make-it-again-or-polish-it).
 
-**The shortcut is Control+Shift+9:** press it once to start and again to stop. On a Mac, use
-**Control**, not Command. It works while the recorded tab in Chrome has focus; if nothing happens,
-click in the Stand-in terminal in VS Code and press **Enter** instead (once to start, once to stop).
+## How it works
 
-## 1. Set up once
+1. In VS Code, choose **Stand-in: Record Website** and enter an address, such as `wikipedia.org`.
+2. Chrome opens the site. Sign in or get the page ready, then press **Shift twice**, quickly. The
+   tab's title shows a red dot and a timer (● 0:12) while you record.
+3. Do your demo and press **Shift twice** again. Chrome closes, and VS Code says
+   **Your video is ready**. Choose **Open Video**.
+
+That's all there is to it. Shift on its own doesn't type anything, so it never gets in the way of your
+demo, and typing capital letters won't set it off. If pressing Shift twice does nothing, click the
+page and try again, or click in the Stand-in terminal in VS Code and press **Enter** instead, once to
+start and once to stop.
+
+## Set up once
 
 You need:
 
 - **VS Code 1.109 or newer.** [Download VS Code](https://code.visualstudio.com/).
-- **Node.js 24.11 or newer.** [Download Node.js](https://nodejs.org/en/download): choose an LTS
-  installer for your computer and follow its instructions.
-- **Google Chrome 153 or newer.** [Download Chrome](https://www.google.com/chrome/). Chrome Beta,
-  Dev, Canary, and Chrome for Testing also work. Stand-in opens its own Chrome window; other browsers
-  aren't supported.
-- **The Stand-in extension file**, ending in `.vsix`. Get it from a [project release](https://github.com/beekmarks/stand-in/releases)
-  or your project maintainer. If no release is available, a developer can build it using the instructions
-  below.
+- **Google Chrome 153 or newer.** [Download Chrome](https://www.google.com/chrome/). Beta, Dev, Canary
+  and Chrome for Testing also work. Stand-in opens its own Chrome window.
+- **The Stand-in extension**, a `.vsix` file from a [project release](https://github.com/beekmarks/stand-in/releases)
+  or your project maintainer.
 
-After installing Node.js, **fully quit and reopen VS Code** so it can find the new version.
+To install it, open the Command Palette (**Cmd+Shift+P** on Mac, **Ctrl+Shift+P** on Windows and
+Linux), choose **Extensions: Install from VSIX**, and select the file.
 
-### Install the extension
+There's nothing else to install. The extension uses the Node.js built into VS Code. With a VS Code from
+before early 2026, Stand-in says so and links to [Node.js](https://nodejs.org/en/download): install
+version 22 or newer, then fully quit and reopen VS Code. If Chrome is missing or too old, Stand-in's
+message has a button to get it.
 
-1. In VS Code, open the Command Palette: **Cmd+Shift+P** on Mac, or **Ctrl+Shift+P** on Windows/Linux.
-2. Type **Extensions: Install from VSIX** and select it.
-3. Choose the Stand-in `.vsix` file. Follow any prompt to reload VS Code.
+## What to expect
 
-That's it. You do not need to install additional recorder packages or use a terminal to set up the extension.
+**When you start.** The address box remembers your last site. Stand-in doesn't ask where to save:
+videos go into the folder open in VS Code or, if none is, into **Movies/Stand-in** in your home folder
+(**Videos/Stand-in** on Windows and Linux). Stand-in keeps the browser session between recordings, so
+once you sign in, the next recording starts signed in too.
 
-## 2. Record your first video
+**While you record.** The tab's title shows ● and the time. Stand-in records the one tab it opened,
+across page changes in it, but not the address bar, other tabs, browser dialogs or sound. If a site
+opens a new tab, the terminal says so; switch back to keep it in the video. Pause whenever you like,
+because long pauses are shortened.
 
-1. Open a folder in VS Code where you'd like to save your video. Alternatively, Stand-in will ask you to
-   choose one.
-2. Open the Command Palette again and select **Stand-in: Record Website**.
-3. Enter the website address, for example `wikipedia.org`, and press Enter. If asked, choose a folder for
-   the files.
-4. When Chrome opens, get the page ready. You can sign in before recording if you want to show a signed-in
-   page. Complete any sign-in or security checks yourself.
-5. Press **Control+Shift+9**. Wait until the VS Code terminal says **Recording this tab**. Now perform
-   your demo.
-6. Press **Control+Shift+9** again. Chrome closes, and after a few seconds VS Code says
-   **Your video is ready**. Choose **Open Video** to watch it. Do not close the recorded tab before
-   stopping.
+**When you stop.** Chrome closes and the video is ready a few seconds later, roughly a quarter of the
+recording's length on a typical laptop. The terminal shows its length, such as
+`(0:48; pauses shortened from 1:12)`, and VS Code offers **Open Video**, **Show in Folder** and
+**Open Replay Plan**.
 
-If the shortcut does nothing (usually because Chrome isn't focused), click in the Stand-in terminal and
-press **Enter** to start, then **Enter** again to stop. Chrome comes to the front when you do.
+**If something goes wrong.** You get one plain sentence saying what happened and what to do, not a
+technical error. A recording that ends early is still saved. A recording stopped in its first few
+seconds may be too short to save. See [Troubleshooting](docs/recipes.md) for more.
 
-If you don't see the terminal, select **View > Terminal** in VS Code.
+## Before you share
 
-## 3. Find and review your video
+Stand-in records everything visible in the tab, including account details, and doesn't blur anything.
+Watch the video first, and use a video editor to remove anything you don't want shown.
 
-Choose **Open Video** or **Show in Folder** in the "Your video is ready" message. The video is in
-**recordings** in the folder you opened or chose, named after the site and the time you recorded it, for
-example `wikipedia.org-2026-11-21-14-05.mp4`. Watch it before sharing.
+The replay plan in **demos** can contain page addresses and text you typed (password fields are left
+out). The hidden **.sessions** folder holds your browser session, including sign-in cookies. Keep both
+private, and don't commit them to version control without checking.
 
-The video is a standard H.264 MP4 that plays in QuickTime (including on Intel Macs), Windows Media
-Player, PowerPoint, Teams, Slack and video editors. Chrome records in AV1, so Stand-in converts it using
-Chrome itself; you don't need to install anything. This takes a few seconds, about a quarter of the
-video's length on a typical laptop. If the conversion isn't possible, the terminal says so and keeps the
-AV1 video, which plays in Chrome, Edge, VLC and newer Macs.
+## Make it again, or polish it
 
-Stand-in also saves a `.json` file with the same name in **demos**. You can ignore it if you're happy with the video; it's
-there if you want to [replay or add effects](#optional-replay-or-add-effects) later.
+Replay visits the site again, does what you did, and records a **new** video. It doesn't change your
+first one. Use it when the site has changed, or to add captions and highlights by editing the plan (see
+the [plan reference](docs/plan-format.md)).
 
-**Before sharing:** Stand-in records everything visible in the recorded tab, including account details
-and other sensitive information. It does not automatically hide or blur anything. Use video editing
-software to remove anything you don't want in the finished video.
+1. Choose **Open Replay Plan** in the "Your video is ready" message, or open the `.json` file in
+   **demos**.
+2. Choose **Stand-in: Replay Plan**. The plan that's open in the editor replays straight away.
+3. Each step is listed in the terminal as it runs. VS Code says **Your video is ready** when it's done,
+   for example `wikipedia.org-2026-11-22-14-05-replay.mp4`.
 
-The JSON plan can contain page addresses, element names, and typed text. Password fields are replaced
-with placeholders, but other sensitive values may be saved. The hidden **.sessions** folder contains
-browser session data, which can include sign-in cookies. Keep all three private; don't commit or share
-them without checking. In another repository, they are not automatically excluded from version control.
+What to expect from replay:
 
-### What gets recorded?
+- **It keeps your timing, minus the hesitation.** Your pauses are kept up to 3 seconds each. Waits for
+  pages, and for chat assistants to finish answering, last as long as they need.
+- **It copes with sites that change a little.** Pop-ups and cookie notices you closed are skipped if
+  they don't appear again. Counts and other numbers in link names can change.
+- **It tells you exactly what to fix.** If a step can't be done, the replay stops and names the step
+  and the reason, such as "Couldn't find the link “Pricing” on the page within 10 seconds." The video
+  up to that point is saved with `-incomplete` in its name. Edit that step and replay again.
+- **It asks before acting as you, when needed.** Replays use your saved session, so they can make real
+  changes on signed-in sites. A plan you recorded replays without asking. One that is new to Stand-in or
+  has been edited is shown to you once: type **y** in the terminal only if you approve its actions.
 
-Stand-in records one website tab, across page changes in that tab. Browser buttons and the address bar,
-other tabs, native dialogs, and audio are not recorded. Video size depends on the available window size.
-If you close the recorded tab before stopping, the video cannot be saved.
-
-## Optional: replay or add effects
-
-Replay visits the website again and performs the actions in your JSON plan. It creates a **new** video;
-it does not edit your original MP4. Sites and sessions can change, so replay may not reproduce the
-original exactly.
-
-1. Find the JSON file in **demos** and review its actions. You can edit it to add captions or highlights;
-   see the [plan reference](docs/plan-format.md).
-2. In VS Code, open the Command Palette and choose **Stand-in: Replay Plan**. Select the JSON file.
-3. Replay can make real changes on a website. If the terminal asks for confirmation, type **y** and press
-   Enter only if you approve running those actions. Recordings made by Stand-in use a saved browser session
-   and therefore require this confirmation even if you were signed out.
-4. Each step is listed in the terminal as it runs. When it finishes, VS Code says **Your video is ready**.
-   The replay video is named after the plan, for example `wikipedia.org-2026-11-21-14-05-replay.mp4`.
-   Review it before sharing.
-
-If a step can't be done, for example because the page changed, the replay stops and tells you which step
-failed and why, in plain words. The video up to that point is saved with `-incomplete` in its name. Edit
-that step in the JSON file (its `target`, a longer `timeout`, or `"optional": true` to skip it when it's
-missing) and replay again. Add `--rehearse` on the command line to try the steps without recording.
-
-Clicks that close a pop-up, cookie notice or banner are saved as optional steps, because sites often
-remember that you closed them and don't show them again on replay.
-
-Your saved session may expire. If it does, make a new recording and sign in before starting. Some websites
-may not allow a session to be reused. Actions performed while preparing the original page are not in the
-plan.
-
-**Demoing a chat assistant?** Ask your question, press Enter or click Send, and wait for the whole answer
-before doing anything else. The plan then waits for the answer on replay, however long it takes, instead
-of for a fixed time; it rides out "thinking" pauses and ignores changes elsewhere on the page. See
+**Demoing a chat assistant?** Ask your question, then wait for the whole answer before doing anything
+else. Replay then waits for the answer, however long it takes. See
 [Waiting for chat answers](docs/plan-format.md#waiting-for-chat-answers).
 
-### Try the sample replay
+To try replay without recording anything, download this repository (**Code > Download ZIP**), choose
+**Stand-in: Replay Plan**, and select `demos/sample/assistant-tour.json`. It runs on a fictional site
+included in the repository.
 
-The repository includes a sample plan for a fictional website, so you can try replay without recording
-anything or signing in. Download the repository (**Code > Download ZIP** on GitHub) and unzip it. In
-VS Code, choose **Stand-in: Replay Plan** and select `demos/sample/assistant-tour.json`. The new video
-appears in **recordings** in the folder you chose.
+## Other ways to use Stand-in
 
-## Optional: ask an assistant
-
-If you use GitHub Copilot in VS Code, you can ask an assistant to make the demo for you. For example:
+**Ask an assistant.** With GitHub Copilot in VS Code, you can describe the demo instead of performing it:
 
 > Use Stand-in to open https://www.wikipedia.org, search for space exploration, and show the result.
 
-The bundled Stand-in skill can create an editable plan and record it. Skill availability depends on your
-Copilot setup and active agent. The assistant should not sign in for you, and a signed-in replay still
-needs your approval.
+The extension includes this skill. It can also be [installed on its own](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension),
+which needs Node.js 22 or newer. The assistant won't sign in for you.
 
-You can also use Stand-in as a **standalone Copilot skill**, without the extension. See the
-[skill installation guide](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension).
-The standalone skill includes its recorder dependencies, but still requires Node.js and Chrome.
-
-## Command line from source
-
-For users comfortable with a terminal, install Node.js 24.11+ and Chrome 153+, then run these
-commands from a Stand-in source checkout:
+**Command line.** From a source checkout, with Node.js 22+ and Chrome 153+:
 
 ```sh
 npm ci --prefix tools/recorder
 node tools/recorder/record.mjs wikipedia.org
+node tools/recorder/record.mjs replay demos/wikipedia.org-2026-11-22-14-05.json
 ```
 
-Prepare the page, then use **Control+Shift+9** (or Enter in the terminal) to start and stop. Wait for
-**Your video is ready**; the video and plan are placed in `recordings/` and `demos/` under the current
-folder. Add `--av1` to keep Chrome's original AV1 video and skip the conversion, or `--debug` to see
-technical details when something goes wrong.
-To replay a reviewed plan, run:
-
-```sh
-node tools/recorder/record.mjs replay demos/your-plan.json
-```
-
-Replay can change real data and may ask for confirmation, as described above.
-
-## Related projects
-
-Stand-in builds on Chrome's native tab recorder through Paul Irish's
-[chrome-capture](https://github.com/paulirish/chrome-capture), with browser control from Playwright.
-Other tools cover similar ground and may suit you better:
-[Chrome DevTools Recorder](https://developer.chrome.com/docs/devtools/recorder) and Playwright `codegen`
-also turn clicks into replayable steps; [RunThru](https://github.com/marktolson/runthru) and
-[humanjs](https://github.com/totigm/humanjs) capture flows by demonstration; and
-[webreel](https://webreel.dev/) and Playwright's screencast API produce polished scripted videos.
-Screen recorders such as Loom are simpler when you only need one take and never plan to re-record.
+It works the same way: Shift twice or Enter to start and stop, Ctrl+C to stop and save. Files go
+into `recordings/` and `demos/` in the current folder. `--rehearse` tries a replay without recording,
+`--av1` keeps Chrome's original AV1 video instead of converting it, and `--debug` shows technical
+details.
 
 ## Need help?
 
-See [Troubleshooting](docs/recipes.md) for missing commands, Node or Chrome errors, shortcut problems,
-and replay issues. Share the [company pilot guide](docs/company-pilot-guide.md) with colleagues who
-want to try Stand-in. The [plan reference](docs/plan-format.md) covers advanced JSON editing.
+[Troubleshooting](docs/recipes.md) covers starting and stopping, finding videos, playback, replay failures and
+sensitive information. The [company pilot guide](docs/company-pilot-guide.md) is a short version to
+share with colleagues. The [plan reference](docs/plan-format.md) covers editing replay plans.
 
-## Build the extension from source
+## Related projects
 
-For developers: install Node.js 24.11+, run `npm install`, then run `npm run package` in the repository.
-This creates a VSIX that can be installed as described above. The existing workspace tasks remain
-available to contributors working in this source checkout.
+Stand-in builds on Chrome's native tab recorder, first packaged by Paul Irish's
+[chrome-capture](https://github.com/paulirish/chrome-capture), with browser control from Playwright and
+video conversion by [mediabunny](https://mediabunny.dev). If you only ever need one take and never
+re-record, a screen recorder such as Loom may be simpler. For scripted videos, see
+[webreel](https://webreel.dev/) and Playwright's screencast API. For turning clicks into steps, see
+[Chrome DevTools Recorder](https://developer.chrome.com/docs/devtools/recorder), Playwright `codegen`,
+[RunThru](https://github.com/marktolson/runthru) and [humanjs](https://github.com/totigm/humanjs).
 
-To build the standalone skill ZIP instead, run `npm run package:skill`. The ZIP appears in `dist/`;
-share it with the skill installation instructions. Build it after `npm install`, and rebuild it when
-the skill, recorder, or plan reference changes.
+## For developers
+
+Install Node.js 22+, run `npm install`, then:
+
+- `npm test` runs the extension and packaging tests; `npm test --prefix tools/recorder` runs the
+  recorder's.
+- `npm run site-check` makes real demo videos of Wikipedia, GitHub, MDN, Hacker News, weather.gov,
+  DuckDuckGo and BBC the way a person would, replays each plan, and reports how long each video took
+  in `.runs/site-check-<time>/report.md`. Name sites to check only those
+  (`npm run site-check -- github mdn`), and add `--headless` without a display. Sites change, so treat
+  a failure as a lead.
+- `npm run package` builds the `.vsix`; `npm run package:skill` builds the standalone skill ZIP in
+  `dist/`. Rebuild the ZIP when the skill, recorder or plan reference changes.

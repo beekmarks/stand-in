@@ -2,11 +2,20 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {createCommands} = require('../extension.cjs');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {createCommands, recorderRuntime} = require('../extension.cjs');
+
+// VS Code's per-user and per-workspace storage.
+const memento = (values = {}) => ({get: key => values[key], update: async (key, value) => { values[key] = value; }, values});
+const videos = fs.mkdtempSync(path.join(os.tmpdir(), 'stand-in-videos-'));
 
 function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '/work space'}}],
-  input = 'https://example.com', selections = [], active, nodeProblem = null, errorChoice, messageChoice} = {}) {
-  const tasks = [], errors = [], opened = [], messages = [], commandsRun = [], documents = [], endListeners = [];
+  input = 'https://example.com', selections = [], active, nodeProblem = null, errorChoice, messageChoice,
+  memory = memento(), workspaceMemory = memento(), runtime} = {}) {
+  const tasks = [], errors = [], opened = [], messages = [], commandsRun = [], documents = [], endListeners = [],
+    inputs = [], picks = [];
   const vscode = {
     workspace: {workspaceFolders: folders},
     window: {
@@ -16,10 +25,11 @@ function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '
         assert.equal(options.validateInput('example.com'), null);
         assert.match(options.validateInput('not a URL'), /website address/);
         assert.match(options.validateInput('https://user:pass@example.com'), /user name or password/);
+        inputs.push(options);
         return input;
       },
       showOpenDialog: async () => selections.shift(),
-      showQuickPick: async choices => choices[0],
+      showQuickPick: async choices => { picks.push(choices); return choices[0]; },
       showErrorMessage: async (message, ...items) => { errors.push({message, items}); return errorChoice; },
       showInformationMessage: async (message, ...items) => { messages.push({kind: 'info', message, items}); return messageChoice; },
       showWarningMessage: async (message, ...items) => { messages.push({kind: 'warning', message, items}); return messageChoice; },
@@ -55,8 +65,9 @@ function fixture({folders = [{name: 'Workspace', uri: {scheme: 'file', fsPath: '
     for (const entry of endListeners.filter(e => !e.disposed)) await entry.listener({execution: {task}, exitCode: result?.ok ? 0 : 1});
     await new Promise(resolve => setImmediate(resolve));
   };
-  return {commands: createCommands(vscode, '/extension path', {nodeCheck: () => nodeProblem}), tasks, errors, opened,
-    messages, commandsRun, documents, finish};
+  const commands = createCommands(vscode, '/extension path', {memory, workspaceMemory, videosFolder: () => videos,
+    runtime: runtime ?? (() => nodeProblem ? {problem: nodeProblem} : {command: 'node', env: {}})});
+  return {commands, tasks, errors, opened, messages, commandsRun, documents, finish, inputs, picks, memory, workspaceMemory};
 }
 
 test('record command launches the bundled recorder in the selected workspace', async () => {
@@ -68,13 +79,20 @@ test('record command launches the bundled recorder in the selected workspace', a
   assert.equal(tasks[0].execution.options.cwd, '/work space');
 });
 
-test('cancelling the URL or output folder does not start a recording', async () => {
-  const first = fixture({input: null});
+test('cancelling the address does not start a recording', async () => {
+  const {commands, tasks} = fixture({input: null});
+  await commands.record();
+  assert.equal(tasks.length, 0);
+});
+
+test('the address box offers the last site recorded', async () => {
+  const memory = memento();
+  const first = fixture({input: ' wikipedia.org ', memory});
   await first.commands.record();
-  assert.equal(first.tasks.length, 0);
-  const second = fixture({folders: [], selections: [undefined]});
+  assert.equal(first.inputs[0].value, undefined);
+  const second = fixture({memory});
   await second.commands.record();
-  assert.equal(second.tasks.length, 0);
+  assert.equal(second.inputs[0].value, 'wikipedia.org');
 });
 
 test('replay chooses a plan and leaves signed-in approval to the terminal', async () => {
@@ -84,29 +102,73 @@ test('replay chooses a plan and leaves signed-in approval to the terminal', asyn
   assert.equal(tasks[0].execution.options.cwd, '/work space');
 });
 
-test('a folder is chosen when no workspace is open', async () => {
-  const {commands, tasks} = fixture({folders: [], selections: [[{fsPath: '/chosen folder'}]]});
-  await commands.record();
-  assert.equal(tasks[0].execution.options.cwd, '/chosen folder');
+test('the plan open in the editor replays at once, next to its recording', async () => {
+  let saved = false;
+  const plan = {uri: {scheme: 'file', fsPath: '/videos/demos/wikipedia.org-2026-11-22-07-04.json'}, isDirty: true,
+    getText: () => JSON.stringify({url: 'https://www.wikipedia.org/', steps: []}), save: async () => { saved = true; }};
+  const {commands, tasks} = fixture({active: {document: plan}, selections: [() => assert.fail('no file dialog')]});
+  await commands.replay();
+  assert.equal(tasks[0].execution.args[2], '/videos/demos/wikipedia.org-2026-11-22-07-04.json');
+  assert.equal(tasks[0].execution.options.cwd, '/videos');
+  assert.ok(saved, 'unsaved edits are saved before replaying');
 });
 
-test('a multi-folder workspace asks which folder should receive the recording', async () => {
+test('another JSON file in the editor is not mistaken for a plan', async () => {
+  const other = {uri: {scheme: 'file', fsPath: '/work space/package.json'}, getText: () => '{"name": "x"}'};
+  const {commands, tasks} = fixture({active: {document: other}, selections: [[{fsPath: '/plans/demo.json'}]]});
+  await commands.replay();
+  assert.equal(tasks[0].execution.args[2], '/plans/demo.json');
+});
+
+test('with no folder open, recordings go to the videos folder without asking', async () => {
+  const {commands, tasks} = fixture({folders: [], selections: [() => assert.fail('no folder dialog')]});
+  await commands.record();
+  assert.equal(tasks[0].execution.options.cwd, videos);
+  const {defaultFolder} = require('../extension.cjs');
+  assert.match(defaultFolder(), process.platform === 'darwin' ? /Movies[\\/]Stand-in$/ : /Videos[\\/]Stand-in$/);
+});
+
+test('a multi-folder workspace asks once which folder gets recordings, then remembers', async () => {
   const folders = [
     {name: 'First', uri: {scheme: 'file', fsPath: '/first'}},
     {name: 'Second', uri: {scheme: 'file', fsPath: '/second'}},
   ];
-  const {commands, tasks} = fixture({folders});
+  const workspaceMemory = memento();
+  const first = fixture({folders, workspaceMemory});
+  await first.commands.record();
+  assert.equal(first.tasks[0].execution.options.cwd, '/first');
+  assert.equal(first.picks.length, 1);
+  const second = fixture({folders, workspaceMemory});
+  await second.commands.record();
+  assert.equal(second.picks.length, 0);
+  assert.equal(second.tasks[0].execution.options.cwd, '/first');
+});
+
+test("VS Code's own Node runs the recorder when it is new enough, so nothing needs installing", () => {
+  const vscodeRuntime = recorderRuntime({versions: {node: '22.20.0', electron: '39.6.0'}, execPath: '/Applications/Code',
+    nodeCheck: () => assert.fail('PATH not needed')});
+  assert.deepEqual(vscodeRuntime, {command: '/Applications/Code', env: {ELECTRON_RUN_AS_NODE: '1'}});
+  const remote = recorderRuntime({versions: {node: '22.22.0'}, execPath: '/server/node', nodeCheck: () => assert.fail()});
+  assert.deepEqual(remote, {command: '/server/node', env: {}});
+  assert.deepEqual(recorderRuntime({versions: {node: '20.18.0', electron: '33.0.0'}, nodeCheck: () => null}), {command: 'node', env: {}});
+  assert.deepEqual(recorderRuntime({versions: {node: '20.18.0'}, nodeCheck: () => 'Install Node.js'}), {problem: 'Install Node.js'});
+});
+
+test('the recorder runs with the chosen runtime', async () => {
+  const {commands, tasks} = fixture({runtime: () => ({command: '/Applications/Code', env: {ELECTRON_RUN_AS_NODE: '1'}})});
   await commands.record();
-  assert.equal(tasks[0].execution.options.cwd, '/first');
+  assert.equal(tasks[0].execution.command, '/Applications/Code');
+  assert.equal(tasks[0].execution.options.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.ok(tasks[0].execution.options.env.STAND_IN_RESULT);
 });
 
 test('a missing or old Node.js is reported before anything starts', async () => {
-  const {commands, tasks, errors, opened} = fixture({nodeProblem: 'Stand-in needs Node.js 24.11 or newer.',
+  const {commands, tasks, errors, opened} = fixture({nodeProblem: 'Stand-in needs Node.js 22 or newer.',
     errorChoice: 'Download Node.js'});
   await commands.record();
   assert.equal(tasks.length, 0);
   assert.equal(errors.length, 1);
-  assert.match(errors[0].message, /24\.11/);
+  assert.match(errors[0].message, /Node\.js 22/);
   assert.deepEqual(errors[0].items, ['Download Node.js']);
   assert.deepEqual(opened, ['https://nodejs.org/en/download']);
 });
@@ -114,9 +176,9 @@ test('a missing or old Node.js is reported before anything starts', async () => 
 test('the Node.js check accepts the running version only when it is new enough', () => {
   const {checkNode} = require('../extension.cjs');
   const result = checkNode();
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (major > 24 || (major === 24 && minor >= 11)) assert.equal(result, null);
-  else assert.match(result, /24\.11/);
+  const [major] = process.versions.node.split('.').map(Number);
+  if (major >= 22) assert.equal(result, null);
+  else assert.match(result, /Node\.js 22/);
 });
 
 test('a website without https:// is accepted and completed', async () => {
@@ -168,4 +230,12 @@ test('a failure without a video shows the reason; a cancelled run shows nothing'
   await cancelled.commands.record();
   await cancelled.finish(null);
   assert.equal(cancelled.errors.length + cancelled.messages.length, 0);
+});
+
+test('a problem with a fix on the web gets a button for it', async () => {
+  const {commands, errors, opened, finish} = fixture({errorChoice: 'Get Chrome'});
+  await commands.record();
+  await finish({ok: false, error: "Stand-in needs Google Chrome, which isn't installed.", link: 'https://www.google.com/chrome/'});
+  assert.deepEqual(errors[0].items, ['Get Chrome']);
+  assert.deepEqual(opened, ['https://www.google.com/chrome/']);
 });

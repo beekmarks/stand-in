@@ -12,7 +12,7 @@
     },
     {
       "label": "Demo: Record website",
-      "detail": "Enter a website URL, then use Ctrl+Shift+9 to start and stop recording",
+      "detail": "Enter a website URL, then press Shift twice to start and stop recording",
       "type": "process",
       "command": "node",
       "args": ["${workspaceFolder}/tools/recorder/record.mjs", "${input:url}"],

@@ -72,7 +72,8 @@ When you submit a question in a text field (press Enter, or click a button such 
 typing) and then wait for the answer, the captured plan gets a `waitForStable` step whose `around` is the
 question box, so replay waits for the answer however long it takes. If the page went to a new address
 after you submitted, as with a search, the pause stays a fixed `wait`. Other pauses are fixed `wait`
-steps too. In a hand-written plan, the step looks like this:
+steps too, shortened to 3 seconds when you hesitated longer; their `note` says so, and you can raise
+`ms` to keep more. In a hand-written plan, the step looks like this:
 
 ```json
 {"action": "type", "target": {"placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},

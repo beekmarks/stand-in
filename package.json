@@ -11,7 +11,7 @@
   },
   "engines": {
     "vscode": "^1.109.0",
-    "node": ">=24.11.0"
+    "node": ">=22"
   },
   "categories": ["Other"],
   "main": "./extension.cjs",
@@ -48,10 +48,10 @@
   "scripts": {
     "test": "node --test test/*.test.cjs",
     "package": "vsce package",
-    "package:skill": "node scripts/package-skill.cjs"
+    "package:skill": "node scripts/package-skill.cjs",
+    "site-check": "node scripts/site-check.mjs"
   },
   "dependencies": {
-    "chrome-capture": "0.1.2",
     "mediabunny": "1.65.2",
     "playwright-core": "1.65.1"
   },

@@ -4,11 +4,10 @@
   "private": true,
   "description": "Quick website demo recordings with editable replay plans",
   "type": "module",
-  "engines": {"node": ">=24.11.0"},
+  "engines": {"node": ">=22"},
   "bin": {"stand-in": "record.mjs"},
   "scripts": {"test": "node --test"},
   "dependencies": {
-    "chrome-capture": "0.1.2",
     "mediabunny": "1.65.2",
     "playwright-core": "1.65.1"
   }
