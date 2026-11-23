@@ -117,12 +117,16 @@ function createCommands(vscode, extensionPath, {runtime = () => recorderRuntime(
     }
   }
 
-  async function run(args, cwd, name, {command, env}) {
+  // `folder` is where the video and plan are saved. With no folder open in VS Code, a task must start in the
+  // home folder (VS Code refuses any other), so the recorder is told the folder separately and moves there.
+  async function run(args, folder, name, {command, env}) {
     const id = crypto.randomUUID();
     const definition = {type: 'stand-in', action: name, run: id};
     const resultFile = path.join(os.tmpdir(), `stand-in-result-${id}.json`);
+    const cwd = vscode.workspace.workspaceFolders?.length ? folder : os.homedir();
     const task = new vscode.Task(definition, vscode.TaskScope.Global, name, 'Stand-in',
-      new vscode.ProcessExecution(command, [recorder, ...args], {cwd, env: {...env, STAND_IN_RESULT: resultFile}}));
+      new vscode.ProcessExecution(command, [recorder, ...args],
+        {cwd, env: {...env, STAND_IN_FOLDER: folder, STAND_IN_RESULT: resultFile}}));
     task.presentationOptions = {reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Dedicated, clear: true};
     const listener = vscode.tasks.onDidEndTaskProcess?.(event => {
       if (event.execution?.task?.definition?.run !== id) return;

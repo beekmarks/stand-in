@@ -1784,6 +1784,15 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
     return;
   }
   requireSupportedNode(process.versions.node);
+  // The VS Code extension names the folder to save into here, because VS Code can't always start the
+  // recorder in that folder.
+  const folder = process.env.STAND_IN_FOLDER;
+  if (folder) {
+    try { process.chdir(folder); } catch (error) {
+      throw new UserError(error.code === 'ENOENT' ? `The folder for your videos doesn't exist: ${folder}`
+        : `Stand-in can't use the folder for your videos, ${folder}: ${error.message}`);
+    }
+  }
   const replay = positionals[0] === 'replay';
   if ((replay && positionals.length !== 2) || (!replay && positionals.length !== 1))
     throw new UserError('Use stand-in <website URL> or stand-in replay <plan.json>.');

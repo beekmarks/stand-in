@@ -285,7 +285,9 @@ test('only a quick double Shift starts recording, not typing or Shift-clicking',
 });
 
 // Runs the CLI against a page from `html`, in headless Chrome it can reach, until it is ready to record.
-async function liveCli(name, html, extraArgs = []) {
+// With `elsewhere`, the CLI starts in another folder and is told where to save, the way the VS Code extension
+// starts it when no folder is open.
+async function liveCli(name, html, extraArgs = [], {elsewhere = false} = {}) {
   const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(html); });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
@@ -299,7 +301,8 @@ async function liveCli(name, html, extraArgs = []) {
   const quoted = `'${chrome.replaceAll("'", "'\\''")}'`;
   await writeFile(wrapper, `#!/bin/sh\nexec ${quoted} --headless=new --remote-debugging-port=${port} "$@"\n`, {mode: 0o755});
   const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), url, '--chrome', wrapper, ...extraArgs],
-    {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    {cwd: elsewhere ? await mkdtemp(join(dir, 'start-')) : cwd, stdio: ['ignore', 'pipe', 'pipe'],
+      env: elsewhere ? {...process.env, STAND_IN_FOLDER: cwd} : process.env});
   const run = {child, url, cwd, output: '', connected: null, exited: once(child, 'close'),
     async close() {
       if (child.exitCode === null) child.kill('SIGKILL');
@@ -354,7 +357,8 @@ test('the one-command CLI saves both files', {skip: process.platform === 'win32'
 });
 
 test('Ctrl+C while recording saves the video and plan instead of losing them', {skip: process.platform === 'win32', timeout: 60000}, async () => {
-  const run = await liveCli('ctrl-c', '<button onclick="this.textContent=\'Clicked\'">Click me</button>');
+  const run = await liveCli('ctrl-c', '<button onclick="this.textContent=\'Clicked\'">Click me</button>', [],
+    {elsewhere: true});
   try {
     await doubleShift(run.page);
     await waitForLiveState(run.page, 'recording');

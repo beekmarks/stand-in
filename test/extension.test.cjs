@@ -77,6 +77,7 @@ test('record command launches the bundled recorder in the selected workspace', a
   assert.equal(tasks[0].execution.command, 'node');
   assert.deepEqual(tasks[0].execution.args, ['/extension path/tools/recorder/record.mjs', 'https://example.com/']);
   assert.equal(tasks[0].execution.options.cwd, '/work space');
+  assert.equal(tasks[0].execution.options.env.STAND_IN_FOLDER, '/work space');
 });
 
 test('cancelling the address does not start a recording', async () => {
@@ -123,7 +124,9 @@ test('another JSON file in the editor is not mistaken for a plan', async () => {
 test('with no folder open, recordings go to the videos folder without asking', async () => {
   const {commands, tasks} = fixture({folders: [], selections: [() => assert.fail('no folder dialog')]});
   await commands.record();
-  assert.equal(tasks[0].execution.options.cwd, videos);
+  // VS Code only starts tasks in the home folder when no folder is open, so the recorder is told where to save.
+  assert.equal(tasks[0].execution.options.cwd, os.homedir());
+  assert.equal(tasks[0].execution.options.env.STAND_IN_FOLDER, videos);
   const {defaultFolder} = require('../extension.cjs');
   assert.match(defaultFolder(), process.platform === 'darwin' ? /Movies[\\/]Stand-in$/ : /Videos[\\/]Stand-in$/);
 });
