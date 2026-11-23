@@ -40,8 +40,9 @@ a second, with nothing else in between. While recording, the tab's title starts 
 timer (● 0:42); the terminal also says **Recording this tab**. Press Shift twice again and wait for
 **Your video is ready**. (The original shortcut, **Control+Shift+9**, also still works.)
 
-Only the tab Stand-in opened is recorded. If the site opened another tab, the terminal says so; pressing
-Shift twice doesn't work there. Switch back to the original tab (or close the new one) first.
+Stand-in keeps the demo in the tab it opened: links that would open a new tab open there instead. If a
+site opens a pop-up window (a sign-in window, say), finish there and click back in the original tab;
+pressing Shift twice only works in the recorded tab.
 If an embedded part of the page doesn't respond, click the main page and try again.
 
 If it still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code

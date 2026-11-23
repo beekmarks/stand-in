@@ -8,7 +8,7 @@ import {createServer} from 'node:http';
 import {join, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {chromium} from 'playwright-core';
-import {findChrome, liveCapture, liveRecording, requireSupportedNode, StepBuilder} from '../record.mjs';
+import {findChrome, keepInOneTab, liveCapture, liveRecording, oneTabInit, requireSupportedNode, StepBuilder} from '../record.mjs';
 
 const root = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 let browser, dir;
@@ -242,6 +242,63 @@ test('live shortcut works in focused iframes across navigation', async () => {
   } finally { await ctx.close(); }
 });
 
+test('links, forms and scripts that open a new tab stay in the recorded tab', async () => {
+  const servers = [];
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  try {
+    const pages = {'/one-tab-target.html': '<h1>Arrived</h1>', '/one-tab.html': `
+      <a href="one-tab-target.html?link" target="_blank">Blank link</a>
+      <a href="one-tab-target.html?named" target="somewhere">Named link</a>
+      <form action="one-tab-target.html" target="_blank"><input name="form" value="1"><button>Send</button></form>
+      <button onclick="window.open('one-tab-target.html?open', '_blank', 'noopener')">Open</button>
+      <button onclick="const w = window.open(); w.location = location.origin + '/one-tab-target.html?later'">Open later</button>
+      <a href="one-tab-target.html?middle">Middle</a>
+      <button onclick="window.open('one-tab-target.html?popup', 'signin', 'width=400,height=400')">Sign in</button>`};
+    const server = createServer((req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end(pages[new URL(req.url, 'http://x').pathname] ?? '');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const start = `http://127.0.0.1:${server.address().port}/one-tab.html`;
+    await ctx.addInitScript(oneTabInit);
+    let recording = true;
+    keepInOneTab(ctx, page, {active: () => recording});
+    const onlyOneTab = async what => {
+      for (let i = 0; i < 50 && ctx.pages().length > 1; i++) await page.waitForTimeout(100);
+      assert.equal(ctx.pages().length, 1, `${what} left another tab open`);
+    };
+    const tries = [
+      ['link', 'Blank link', 'link', {}], ['link', 'Named link', 'named', {}], ['button', 'Send', 'form=1', {}],
+      ['button', 'Open', 'open', {}], ['button', 'Open later', 'later', {}], ['link', 'Middle', 'middle', {button: 'middle'}],
+    ];
+    for (const [role, name, query, options] of tries) {
+      await page.goto(start);
+      await page.getByRole(role, {name, exact: true}).click(options);
+      await page.waitForURL(u => u.search.includes(query), {timeout: 10000}).catch(error => { throw new Error(`${name}: ${error.message.split('\n')[0]} (at ${page.url()}, ${ctx.pages().length} tabs)`); });
+      assert.equal(await page.locator('h1').innerText(), 'Arrived', name);
+      await onlyOneTab(name);
+    }
+    // A sized pop-up window, such as a sign-in window, is left open: closing it would break the site.
+    await page.goto(start);
+    const [popup] = await Promise.all([ctx.waitForEvent('page'), page.getByRole('button', {name: 'Sign in'}).click()]);
+    await page.waitForTimeout(1500);
+    assert.ok(!popup.isClosed(), 'the pop-up window stays open');
+    assert.equal(page.url(), start);
+    await popup.close();
+    // Before recording starts (signing in, say), a new tab is left as it is.
+    recording = false;
+    await page.getByRole('link', {name: 'Middle'}).click({button: 'middle'});
+    await page.waitForTimeout(1500);
+    assert.equal(ctx.pages().length, 2);
+    assert.equal(page.url(), start);
+  } finally {
+    await ctx.close();
+    for (const server of servers) server.close();
+  }
+});
+
 test('only a quick double Shift starts recording, not typing or Shift-clicking', async () => {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -353,6 +410,41 @@ test('the one-command CLI saves both files', {skip: process.platform === 'win32'
     const plan = JSON.parse(await readFile(join(cwd, 'demos', planName), 'utf8'));
     assert.equal(plan.url, url);
     assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Click me'));
+  } finally { await run.close(); }
+});
+
+test('a link that opens a new tab is recorded and replayed in the same tab', {skip: process.platform === 'win32', timeout: 90000}, async () => {
+  const run = await liveCli('new-tab', `<script>document.write(location.search.includes('next')
+    ? '<h1>Second page</h1><input aria-label="Notes">'
+    : '<a href="/?next" target="_blank">Read more</a>')</script>`);
+  const {page, cwd} = run;
+  try {
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('link', {name: 'Read more'}).click();
+    await page.waitForURL(u => u.search.includes('next'));
+    assert.equal(page.context().pages().length, 1, 'the link opened in the recorded tab');
+    await page.getByRole('textbox', {name: 'Notes'}).fill('');
+    await page.getByRole('textbox', {name: 'Notes'}).pressSequentially('hello', {delay: 40});
+    await page.waitForTimeout(1000);
+    await doubleShift(page);
+    const [code] = await run.exited;
+    assert.equal(code, 0, run.output);
+    const [planName] = await readdir(join(cwd, 'demos'));
+    const planPath = join(cwd, 'demos', planName);
+    const plan = JSON.parse(await readFile(planPath, 'utf8'));
+    assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Read more'));
+    assert.ok(plan.steps.some(s => s.action === 'type' && s.text === 'hello'));
+    // Replay follows the link in the same tab too, so the typing step finds its box.
+    const replayed = join(cwd, 'replayed.mp4');
+    const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless',
+      '--output', replayed], {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    const [replayCode] = await once(child, 'close');
+    assert.equal(replayCode, 0, output);
+    assert.match(output, /Your video is ready/);
   } finally { await run.close(); }
 });
 

@@ -1512,6 +1512,79 @@ async function confirmSignedInReplay(plan, planText, approved) {
   if (plan.profileDir) await approvePlan(plan.profileDir, planText).catch(() => {});
 }
 
+// Chrome records one tab, so the demo stays in one tab: links, forms and scripts that would open a new tab
+// open in this one instead. Real pop-up windows (opened with a size, such as sign-in or payment windows)
+// are left alone, because the site needs them to stay separate.
+function oneTabInit() {
+  const elsewhere = target => {
+    if (!target || /^_(self|parent|top)$/i.test(target)) return false;
+    if (target.toLowerCase() === '_blank') return true;
+    try {
+      for (let i = 0; i < top.frames.length; i++) if (top.frames[i].name === target) return false;
+    } catch {}
+    return true;
+  };
+  // Change the target only for this one click or submit, then put it back.
+  const redirect = element => {
+    const had = element.hasAttribute('target'), before = element.getAttribute('target');
+    element.setAttribute('target', '_top');
+    setTimeout(() => had ? element.setAttribute('target', before) : element.removeAttribute('target'));
+  };
+  addEventListener('click', e => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const link = e.composedPath().find(n => n instanceof Element && n.matches('a[href], area[href]'));
+    if (link && elsewhere(link.getAttribute('target'))) redirect(link);
+  }, true);
+  addEventListener('submit', e => {
+    const form = e.target;
+    const button = e.submitter;
+    if (button?.hasAttribute('formtarget') ? elsewhere(button.getAttribute('formtarget')) : elsewhere(form.getAttribute('target'))) {
+      redirect(form);
+      if (button?.hasAttribute('formtarget')) redirect(button);
+    }
+  }, true);
+  const open = window.open;
+  window.open = function (url, target, features) {
+    const popupWindow = typeof features === 'string' && /\b(popup|width|height|left|top)\b/i.test(features);
+    const address = url === undefined || url === null ? '' : String(url);
+    if (popupWindow || !elsewhere(target ?? '_blank') || !address || address === 'about:blank')
+      return open.apply(this, arguments);
+    top.location.href = new URL(address, location.href).href;
+    return top;
+  };
+}
+
+// The rest of the one-tab rule, for tabs that still open (a middle-click, or a script that opens an empty tab
+// and sets its address later): close the new tab and open its page in the recorded tab. Only while `active()`.
+function keepInOneTab(ctx, page, {active}) {
+  ctx.on('page', async other => {
+    if (other === page || !active()) return;
+    try {
+      let url = other.url();
+      if (!url || url === 'about:blank') {
+        await other.waitForURL(u => u.href !== 'about:blank', {timeout: 5000}).catch(() => {});
+        url = other.url();
+      }
+      // A pop-up window has no toolbar. Closing it would break the site (a sign-in, say), so leave it.
+      const popupWindow = await other.evaluate(() => !window.toolbar.visible).catch(() => false);
+      if (popupWindow) {
+        log('The site opened a pop-up window, which isn\'t in the video. Finish there; the recording continues in the original tab.');
+        return;
+      }
+      if (!url || url === 'about:blank' || !active()) {
+        log('A new tab opened. It isn\'t in the video; switch back to the original tab to keep recording.');
+        return;
+      }
+      await other.close().catch(() => {});
+      log('Opened the new tab\'s page in the recorded tab instead, so it\'s in the video.');
+      await page.bringToFront().catch(() => {});
+      await page.goto(url, {waitUntil: 'commit', timeout: 45000});
+    } catch (error) {
+      if (!page.isClosed()) log(`A new tab opened and couldn't be moved into the recorded tab: ${error.message.split('\n')[0]}`);
+    }
+  });
+}
+
 function liveShortcutInit() {
   if (window.__standInLiveShortcut) return;
   window.__standInLiveShortcut = true;
@@ -1632,11 +1705,6 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording = recor
   page.once('close', ended('The recorded tab was closed before recording started; nothing was recorded.', 'The recorded tab was closed.', true));
   page.once('crash', ended(CRASHED, 'The Chrome tab crashed, usually from running out of memory.', true));
   ctx.once('close', ended('Chrome was closed before recording started; nothing was recorded.', 'Chrome was closed.', true));
-  // Only the starting tab is recorded. Say so when the site opens another one, or the video seems to freeze.
-  ctx.on('page', other => {
-    if (state === 'recording' && other !== page)
-      log('A new tab opened. Only the original tab is being recorded; close the new tab or switch back to keep it in the video.');
-  });
   await ctx.exposeBinding('__standInLiveState', ({page: source}) => source === page ? state : 'unavailable');
   // One state machine for every control: the shortcut in the page, Enter in the terminal, and Ctrl+C.
   const toggle = async ({cutShort} = {}) => {
@@ -1889,9 +1957,11 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
       }
     }
     await ctx.addInitScript(overlayInit, plan.overlay);
+    await ctx.addInitScript(oneTabInit);
     if (!replay) {
       const capture = await liveCapture({ctx, page, plan, planPath, profileDir: plan.profileDir});
-      const {done, toggle, interrupt} = await liveRecording({ctx, page, plan, videoPath, capture});
+      const {done, toggle, interrupt, state} = await liveRecording({ctx, page, plan, videoPath, capture});
+      keepInOneTab(ctx, page, {active: () => state() === 'recording'});
       page.on('dialog', d => log(`Browser ${d.type()} dialog: respond in Chrome.`));
       try {
         await page.goto(plan.url, {waitUntil: 'domcontentloaded', timeout: 45000});
@@ -1915,7 +1985,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
       await ctx.addInitScript(z => { const set = () => { if (document.documentElement) document.documentElement.style.zoom = z; };
         set(); document.addEventListener('DOMContentLoaded', set); }, String(plan.zoom));
     page.on('dialog', d => { log(`Accepting browser ${d.type()} dialog during replay.`); d.accept().catch(e => log(`Dialog failed: ${e.message}`)); });
-    ctx.on('page', () => log('The site opened a new tab. Replay continues in the original tab, which is the one recorded.'));
+    keepInOneTab(ctx, page, {active: () => !page.isClosed()});
     log(`Replaying ${shown(planPath)} on ${plan.url}`);
     try {
       await page.goto(plan.url, {waitUntil: 'load', timeout: 45000});
@@ -1993,7 +2063,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
   if (failure) throw failure;
 }
 
-export {Actor, captureInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
+export {Actor, captureInit, keepInOneTab, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
   quickMain().catch(async error => {

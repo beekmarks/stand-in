@@ -51,8 +51,9 @@ Stand-in doesn't ask where to save. Videos go into the folder open in VS Code or
 
 ## What to expect
 
-- Only the tab Stand-in opened is recorded, across page changes in it: not the address bar, other
-  tabs, browser dialogs or sound.
+- Everything happens in the one tab Stand-in opened. Links and buttons that would open a new tab open
+  in that tab instead, so they're in the video. The address bar, browser dialogs and sound aren't
+  recorded, and neither are pop-up windows such as a sign-in window.
 - The video is ready a few seconds after you stop, roughly a quarter of the recording's length. The
   terminal shows how long it is and how much the pauses were shortened.
 - If something goes wrong, Stand-in says what happened and what to do in one sentence. When the fix is

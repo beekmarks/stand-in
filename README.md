@@ -64,10 +64,10 @@ videos go into the folder open in VS Code or, if none is, into **Movies/Stand-in
 (**Videos/Stand-in** on Windows and Linux). Stand-in keeps the browser session between recordings, so
 once you sign in, the next recording starts signed in too.
 
-**While you record.** The tab's title shows ● and the time. Stand-in records the one tab it opened,
-across page changes in it, but not the address bar, other tabs, browser dialogs or sound. If a site
-opens a new tab, the terminal says so; switch back to keep it in the video. Pause whenever you like,
-because long pauses are shortened.
+**While you record.** The tab's title shows ● and the time. Everything happens in the one tab Stand-in
+opened: links and buttons that would open a new tab open right there instead, so they're in the video.
+The address bar, browser dialogs and sound aren't recorded, and neither are pop-up windows a site needs
+to keep separate, such as a sign-in window. Pause whenever you like, because long pauses are shortened.
 
 **When you stop.** Chrome closes and the video is ready a few seconds later, roughly a quarter of the
 recording's length on a typical laptop. The terminal shows its length, such as

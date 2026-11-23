@@ -84,6 +84,15 @@ const SITES = {
     await page.waitForLoadState('load');
     await p.look(2500);
   }},
+  // weather.gov's "Read More" link opens a new tab; Stand-in should keep it in the recorded tab.
+  newtab: {url: 'www.weather.gov', async demo(page, p) {
+    await p.look();
+    await p.click(page.getByRole('link', {name: /Read More/}).first());
+    await page.waitForURL(/noaa\.gov/, {timeout: 20000});
+    if (page.context().pages().length !== 1) throw new Error('The link opened a separate tab.');
+    await p.look(2000);
+    await p.scroll(400);
+  }},
   duckduckgo: {url: 'duckduckgo.com', async demo(page, p) {
     await p.click(page.locator('input[name="q"], textarea[name="q"]').first());
     await p.type('mdn array flat');
