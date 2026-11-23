@@ -90,6 +90,10 @@ recording if the session expired, or edit that step in the plan: change its `tar
 without making a video, run the replay from the command line with `--rehearse`. Some preparation done before
 the original recording may also need to be repeated. Your original MP4 is not modified by replay.
 
+If the step clicks a link in a menu that opens when you point at a nav item, replay opens the menu itself.
+If it can't find the nav item, add a step just before it that points at the item, for example
+`{"action": "hover", "target": {"role": "link", "name": "Planning & Advice"}}`.
+
 ## I recorded sensitive information
 
 Stand-in has no automatic redaction. Review the entire MP4 and use video editing software to remove

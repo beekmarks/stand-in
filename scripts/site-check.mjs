@@ -39,6 +39,11 @@ function person(page) {
       await sleep(250);
       await page.mouse.click(x, y);
     },
+    async hover(locator) {
+      const {x, y} = await point(locator);
+      await page.mouse.move(x, y, {steps: 12});
+      await sleep(900);
+    },
     async type(text) { await page.keyboard.type(text, {delay: 90}); },
     async press(key) { await page.keyboard.press(key); },
     async scroll(dy, times = 6) { for (let i = 0; i < times; i++) { await page.mouse.wheel(0, dy); await sleep(80); } },
@@ -83,6 +88,14 @@ const SITES = {
     await p.click(page.getByRole('link', {name: /Hourly Weather Forecast/}).first());
     await page.waitForLoadState('load');
     await p.look(2500);
+  }},
+  // weather.gov's top menus open when you point at them; their links are hidden until then.
+  menu: {url: 'www.weather.gov', async demo(page, p) {
+    await p.look();
+    await p.hover(page.getByRole('link', {name: 'FORECAST', exact: true}));
+    await p.click(page.getByRole('link', {name: 'Graphical', exact: true}));
+    await page.waitForURL(u => !/^https:\/\/www\.weather\.gov\/?$/.test(u.href), {timeout: 20000});
+    await p.look(2000);
   }},
   // weather.gov's "Read More" link opens a new tab; Stand-in should keep it in the recorded tab.
   newtab: {url: 'www.weather.gov', async demo(page, p) {

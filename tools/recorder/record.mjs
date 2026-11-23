@@ -424,12 +424,48 @@ function captureInit() {
     }
     down = null;
   }, true);
+  // Menus that open when you point at a nav item: remember what was pointed at, so a click inside the menu
+  // can be preceded by pointing at the item that opened it (replay can't reach a link in a closed menu).
+  let pointed = [];
+  addEventListener('mouseover', e => {
+    if (!e.isTrusted) return;
+    const el = closestAcross(real(e), INTERACTIVE);
+    if (!el || el === pointed.at(-1)?.el) return;
+    pointed = [...pointed.filter(p => p.el !== el), {el, t: Date.now()}].slice(-6);
+  }, true);
+  // The nav item most recently pointed at (before the clicked item) whose menu holds the clicked item.
+  const openedBy = el => {
+    for (const {el: h, t} of [...pointed].reverse()) {
+      if (h === el || Date.now() - t > 20000) continue;
+      const found = opens(h, el);
+      if (found) return found;
+    }
+    return null;
+  };
+  const opens = (h, el) => {
+    if (!h.isConnected || h.contains(el) || el.contains(h)) return null;
+    const ids = (h.getAttribute('aria-controls') ?? '').split(/\s+/).filter(Boolean);
+    for (let n = el; n; n = up(n)) if (n.id && ids.includes(n.id)) return h;
+    // The usual layout: the nav item and its menu share a wrapper, such as a list item.
+    const wrapper = up(h);
+    const wrapper2 = wrapper && !wrapper.matches('nav,ul,ol,[role=menubar],[role=navigation],header,body') ? up(wrapper) : null;
+    const inside = w => w && !w.matches('nav,ul,ol,[role=menubar],[role=navigation],header,body,html') && w.contains(el);
+    const shared = inside(wrapper) ? wrapper : inside(wrapper2) ? wrapper2 : null;
+    if (!shared) return null;
+    // Only real menus: the item pointed at says it opens one, or the clicked item is in a drop-down box.
+    if (h.matches('[aria-haspopup],[aria-expanded]')) return h;
+    for (let n = up(el); n && n !== shared; n = up(n))
+      if (/^(absolute|fixed)$/.test(getComputedStyle(n).position)) return h;
+    return null;
+  };
   addEventListener('click', e => {
     if (!e.isTrusted) return;
     if (down?.dragged) { down = null; return; }
     const t = real(e);
     if (t.tagName === 'SELECT' || t.tagName === 'OPTION') return;
     const el = closestAcross(t, INTERACTIVE) ?? t;
+    const menu = openedBy(el);
+    if (menu) send({kind: 'hover', target: targetFor(menu)});
     send({kind: 'click', target: targetFor(t), button: e.button === 2 ? 'right' : undefined,
       dismiss: isDismiss(el, nameOf(el)) || undefined});
   }, true);
@@ -563,6 +599,13 @@ class StepBuilder {
         break;
       }
       case 'press': this.steps.push({action: 'press', key: ev.key}); break;
+      // Pointing at a nav item opened the menu clicked next.
+      case 'hover': {
+        const prev = this.steps.at(-1);
+        if (!(['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)))
+          this.steps.push({action: 'hover', target, ms: 500});
+        break;
+      }
       case 'drag': this.steps.push({action: 'drag', target, to: withFrame(ev.to)}); break;
       case 'wheel': {
         // No inner scroll container: inside an iframe it's that frame's own document that scrolls.
@@ -600,7 +643,8 @@ class Actor {
   }
   wait(ms) { return this.page.waitForTimeout(Math.round(ms * this.k)); }
 
-  locator(target) {
+  // `hidden`: also match elements that aren't visible, such as links in a closed menu.
+  locator(target, {hidden = false} = {}) {
     const p = this.page;
     if (typeof target === 'string') return p.locator(target);
     const {role, name, text, label, placeholder, testId, css, exact, nth, within, frame} = target;
@@ -614,7 +658,7 @@ class Actor {
     const named = name == null ? {} : exact || typeof name !== 'string' ? {name, exact: !!exact}
       : nth != null ? {name: new RegExp(`^\\s*${pattern(name)}\\s*$`, 'i')}
       : /\d/.test(name) ? {name: new RegExp(pattern(name), 'i')} : {name};
-    let loc = role ? base.getByRole(role, named)
+    let loc = role ? base.getByRole(role, hidden ? {...named, includeHidden: true} : named)
       : text != null ? base.getByText(text, {exact: !!exact})
       : label != null ? base.getByLabel(label, {exact: !!exact})
       : placeholder != null ? base.getByPlaceholder(placeholder, {exact: !!exact})
@@ -636,7 +680,7 @@ class Actor {
       const escaped = words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       loc = full.or(this.locator({...target, name: new RegExp(`^\\s*${escaped}\\b`, 'i')}));
     }
-    await loc.first().waitFor({state: 'visible', timeout});
+    await this.waitVisible(loc.first(), target, timeout);
     if (loc !== full && await full.first().isVisible().catch(() => false)) loc = full;
     // A role name matches as a substring ("Code" also matches "Codespaces"), so an exact name wins.
     if (typeof target === 'object' && target.role && typeof target.name === 'string' && !target.exact && target.nth == null) {
@@ -652,6 +696,92 @@ class Actor {
     const box = await this.trueBox(loc);
     if (!box) throw new Error('Element has no box (hidden or detached)');
     return {loc, box};
+  }
+
+  // Wait for a target to be visible. If it's on the page but hidden in a closed menu (one that opens when you
+  // point at or click a nav item), open that menu the way a person would, then carry on.
+  async waitVisible(first, target, timeout) {
+    const quick = Math.min(timeout, 1500);
+    try { return await first.waitFor({state: 'visible', timeout: quick}); } catch (error) { if (timeout <= quick) throw error; }
+    const started = Date.now();
+    if (await this.openMenuFor(target)) {
+      try { return await first.waitFor({state: 'visible', timeout: 2500}); } catch {}
+    }
+    try {
+      await first.waitFor({state: 'visible', timeout: Math.max(1000, timeout - quick - (Date.now() - started))});
+    } catch (error) {
+      // Report the step's whole timeout, not just this last part of it.
+      error.message = error.message.replace(/Timeout \d+ms/, `Timeout ${timeout}ms`);
+      throw error;
+    }
+  }
+
+  async openMenuFor(target) {
+    if (typeof target !== 'object') return false;
+    // Sites often have the same link twice (a desktop and a mobile menu), so look at each hidden match and
+    // use the one whose menu is closest to the item that opens it.
+    const matches = (await this.locator(target, {hidden: true}).elementHandles().catch(() => [])).slice(0, 8);
+    let best = null;
+    for (const match of matches) {
+      const found = await match.evaluateHandle(el => {
+        const shown = n => {
+          const s = getComputedStyle(n), r = n.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.05;
+        };
+        const closed = n => !shown(n) || n.getAttribute('aria-hidden') === 'true' || n.hasAttribute('inert');
+        const up = n => n.parentElement ?? (n.parentNode instanceof ShadowRoot ? n.parentNode.host : null);
+        const OPENER = 'a[href],button,[role=button],[role=menuitem],[role=tab],[aria-haspopup],[aria-expanded]';
+        // The closed menu: the outermost closed box around the target.
+        let menu = null;
+        for (let n = el; n && n !== document.body; n = up(n)) if (closed(n)) menu = n;
+        if (!menu) return null;
+        const usable = c => shown(c) && !closed(c) && !menu.contains(c) && !c.contains(menu);
+        let opener = null, level = 0;
+        // Something that says it controls the menu (or a box inside it).
+        for (let n = el; n && n !== up(menu) && !opener; n = up(n))
+          if (n.id) {
+            const c = document.querySelector(`[aria-controls~="${CSS.escape(n.id)}"]`);
+            if (c && usable(c)) opener = c;
+          }
+        // The usual layout: the nav item sits just before its menu, in the same wrapper (a list item, say).
+        for (let w = up(menu); !opener && w && w !== document.body && level < 3; w = up(w), level++) {
+          const before = [...w.querySelectorAll(OPENER)].filter(c => usable(c) &&
+            (c.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING));
+          opener = before.findLast(c => c.matches('[aria-haspopup],[aria-expanded]')) ?? before.at(-1) ?? null;
+        }
+        if (!opener) return null;
+        // Lower is better: near the menu, a drop-down box, an item that says it opens a menu.
+        const dropDown = /^(absolute|fixed)$/.test(getComputedStyle(menu).position);
+        const score = level * 4 + (dropDown ? 0 : 2) + (opener.matches('[aria-haspopup],[aria-expanded]') ? 0 : 1);
+        return {opener, score};
+      }).catch(() => null);
+      const score = await found?.evaluate(f => f?.score ?? null).catch(() => null);
+      if (score != null && (!best || score < best.score)) {
+        await best?.found.dispose();
+        best = {found, score};
+      } else await found?.dispose();
+    }
+    for (const match of matches) await match.dispose();
+    const trigger = best ? await best.found.evaluateHandle(f => f.opener) : null;
+    await best?.found.dispose();
+    const opener = trigger?.asElement();
+    if (!opener) return false;
+    const box = await opener.boundingBox().catch(() => null);
+    if (!box) return false;
+    const name = await opener.evaluate(n => (n.getAttribute('aria-label') || n.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60)).catch(() => '');
+    log(`   opening the menu${name ? ` “${name}”` : ''} first`);
+    // Point at it: most menus open on hover.
+    await this.glide(box.x + box.width / 2, box.y + box.height / 2);
+    await this.wait(700);
+    if (await this.locator(target).first().isVisible().catch(() => false)) return true;
+    // Some open on a click instead. Click only if that can't leave the page: a button, a menu toggle or
+    // a link to "#".
+    const toggles = await opener.evaluate(n => !n.matches('a[href]') || n.matches('[aria-haspopup],[aria-expanded]') ||
+      /^(#|javascript:)/i.test(n.getAttribute('href') ?? '')).catch(() => false);
+    if (!toggles) return false;
+    await this.page.mouse.down(); await sleep(70); await this.page.mouse.up();
+    await this.wait(600);
+    return true;
   }
 
   // Playwright's boundingBox() is wrong for elements inside iframes when the page uses CSS zoom, so

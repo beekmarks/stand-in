@@ -448,6 +448,75 @@ test('a link that opens a new tab is recorded and replayed in the same tab', {sk
   } finally { await run.close(); }
 });
 
+test('links in menus that open on hover or click are recorded and replayed', {skip: process.platform === 'win32', timeout: 120000}, async () => {
+  // Three common menus: CSS hover, a script on mouseenter, and a click toggle. Each item leads to a page
+  // that says which link was followed.
+  const html = `<style>
+      nav > div { display: inline-block; position: relative; margin-right: 40px; }
+      .menu { display: none; position: absolute; top: 100%; left: 0; background: #eee; padding: 8px; }
+      .css:hover .menu, .open .menu { display: block; }
+    </style>
+    <script>
+      if (location.search) document.write('<h1>Arrived at ' + location.search.slice(1) + '</h1>');
+    </script>
+    <nav>
+      <div class="css"><a href="/?products">Products</a><div class="menu"><a href="/?funds">Mutual funds</a></div></div>
+      <div class="js"><a href="/?planning">Planning</a><div class="menu"><a href="/?advisors">Financial Advisors</a></div></div>
+      <div class="toggle"><button aria-expanded="false" aria-controls="more">More</button><div id="more" class="menu"><a href="/?help">Help center</a></div></div>
+    </nav>
+    <script>
+      const js = document.querySelector('.js');
+      js.addEventListener('mouseenter', () => setTimeout(() => js.classList.add('open'), 150));
+      js.addEventListener('mouseleave', () => js.classList.remove('open'));
+      const toggle = document.querySelector('.toggle');
+      toggle.querySelector('button').addEventListener('click', e => {
+        toggle.classList.toggle('open');
+        e.currentTarget.setAttribute('aria-expanded', toggle.classList.contains('open'));
+      });
+    </script>`;
+  const run = await liveCli('menus', html);
+  const {page, cwd, url} = run;
+  try {
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    // Point at "Planning", wait for its menu, then click inside it.
+    await page.getByRole('link', {name: 'Planning'}).hover();
+    await page.getByRole('link', {name: 'Financial Advisors'}).click();
+    await page.waitForURL(u => u.search === '?advisors');
+    await page.waitForTimeout(800);
+    await doubleShift(page);
+    const [code] = await run.exited;
+    assert.equal(code, 0, run.output);
+    const [planName] = await readdir(join(cwd, 'demos'));
+    const planPath = join(cwd, 'demos', planName);
+    const plan = JSON.parse(await readFile(planPath, 'utf8'));
+    const kinds = plan.steps.filter(s => s.action !== 'wait').map(s => `${s.action} ${s.target?.name}`);
+    assert.deepEqual(kinds, ['hover Planning', 'click Financial Advisors']);
+
+    const rehearse = async steps => {
+      await writeFile(planPath, JSON.stringify({...plan, url, steps}));
+      const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless',
+        '--rehearse', '--confirm-signed-in'], {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+      let output = '';
+      child.stdout.on('data', data => { output += data; });
+      child.stderr.on('data', data => { output += data; });
+      const [replayCode] = await once(child, 'close');
+      return {code: replayCode, output};
+    };
+    const check = arrived => ({action: 'waitFor', target: {role: 'heading', name: `Arrived at ${arrived}`}, timeout: 5000});
+    // As recorded.
+    let result = await rehearse([...plan.steps, check('advisors')]);
+    assert.equal(result.code, 0, result.output);
+    // Plans without the "point at" step (recorded before this fix) find the menu themselves: hover menus
+    // by pointing at their nav item, and a click toggle by clicking it.
+    for (const [name, arrived] of [['Financial Advisors', 'advisors'], ['Mutual funds', 'funds'], ['Help center', 'help']]) {
+      result = await rehearse([{action: 'click', target: {role: 'link', name}}, check(arrived)]);
+      assert.equal(result.code, 0, `${name}: ${result.output}`);
+      assert.match(result.output, /opening the menu/);
+    }
+  } finally { await run.close(); }
+});
+
 test('Ctrl+C while recording saves the video and plan instead of losing them', {skip: process.platform === 'win32', timeout: 60000}, async () => {
   const run = await liveCli('ctrl-c', '<button onclick="this.textContent=\'Clicked\'">Click me</button>', [],
     {elsewhere: true});

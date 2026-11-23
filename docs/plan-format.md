@@ -61,7 +61,10 @@ more" on every card), it adds `nth`.
 
 Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Optional steps that can't be done are
 skipped with a note in the terminal. Recording marks clicks that close a pop-up, cookie notice or banner
-as `"optional": true, "timeout": 3000`, since sites often don't show them again. Password input is not captured;
+as `"optional": true, "timeout": 3000`, since sites often don't show them again. When you click a link in a
+menu that opened because you pointed at a nav item, recording adds a `hover` step for that nav item first.
+On replay, if a step's target is hidden in a closed menu, Stand-in points at (or clicks) the item that
+opens it, so older plans without the `hover` step still work. Password input is not captured;
 replace `SET-ME` placeholders only after reviewing the plan and the sensitivity of the value. Captured
 actions are approximate: review selectors, waits, navigation and session state before replay. The
 [JSON schema](../tools/recorder/plan.schema.json) provides editor completion.
