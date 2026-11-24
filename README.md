@@ -173,9 +173,12 @@ Install Node.js 22+, run `npm install`, then:
   `scripts/sweep-sites.json`, with no site-specific steps. On each one it behaves like a first-time
   visitor: it closes a cookie notice, opens a menu and clicks a link in it, follows a link, searches for
   "help", scrolls, and follows a link that opens a new tab. Then it checks that a playable video was
-  made, everything stayed in one tab, the plan has a step for each action, and the plan replays to the
-  same page. The report, in `.runs/site-sweep-<time>/report.md`, groups problems by kind with a
-  screenshot of each site. Choose kinds of site or single sites (`npm run site-sweep -- news github.com`).
+  made, everything stayed in one tab, the plan has a step for each action, the plan isn't fragile (no
+  ids that change on every visit, links saved with where they go, no needed click made optional), and the
+  plan replays to the same page. The report, in `.runs/site-sweep-<time>/report.md`, groups problems by kind with a
+  screenshot of each site. Choose kinds of site or single sites (`npm run site-sweep -- news github.com`),
+  or re-check the plans an earlier sweep saved without visiting anything
+  (`npm run site-sweep -- --check-plans .runs/site-sweep-<time>`).
   It takes one to two minutes a site; sites that block automated browsers are listed separately.
 - `npm run package` builds the `.vsix`; `npm run package:skill` builds the standalone skill ZIP in
   `dist/`. Rebuild the ZIP when the skill, recorder or plan reference changes.

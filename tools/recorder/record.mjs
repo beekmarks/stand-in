@@ -307,7 +307,7 @@ function captureInit() {
   // (Also styled-components hashes such as "ieGDnl".)
   // React's ids (":r1:", "«r1»", "_R_5l7d_") and random tokens ("WBVvC") change on every visit.
   const randomPart = p => p.length >= 4 && ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
-    ((p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
+    (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
   const generated = s => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r|«r|_r_)/i.test(s) ||
     s.split(/[-_:.]/).some(randomPart) ||
     (/^[a-zA-Z]{5,8}$/.test(s) && (s.match(/[A-Z]/g) ?? []).length >= 2);
@@ -2141,7 +2141,7 @@ async function frameChain(frame) {
       // Ad and embed scripts often give frames made-up ids ("offer-0-WBVvC") that change on every visit.
       const made = s => /\d{3,}|[a-f0-9]{8,}|__|^(?::r|«r|_r_)/i.test(s) || s.split(/[-_:.]/).some(p => p.length >= 4 &&
         ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
-         ((p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p))));
+         (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p))));
       const tag = n.tagName.toLowerCase(), q = v => JSON.stringify(v);
       if (n.getAttribute('title')) return `${tag}[title=${q(n.getAttribute('title'))}]`;
       if (n.id && !made(n.id)) return `#${CSS.escape(n.id)}`;

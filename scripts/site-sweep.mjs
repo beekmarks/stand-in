@@ -15,7 +15,12 @@
 //   - a playable H.264 video was made, and the recorder reported no problems;
 //   - everything stayed in the one recorded tab;
 //   - the replay plan has a step for each thing the visitor did (a missing one would break replay);
+//   - the plan isn't fragile, which today's replay might not show: it uses no id that changes on every
+//     visit, saves where each link goes, doesn't make a needed click optional, doesn't wait for a chat
+//     answer after a search, and has no extra click from pressing Enter (each one a problem Stand-in had);
 //   - the plan replays (as a rehearsal) and ends on the same page the recording did.
+//
+//   npm run site-sweep -- --check-plans .runs/site-sweep-<time>   re-checks saved plans, visiting nothing
 // Results go to .runs/site-sweep-<time>/report.md, grouped by kind of problem, with a screenshot of each
 // site at the end of its recording. Sites change, and some block automated browsers from data centres:
 // those are reported as "blocked", not as Stand-in problems. A failure is a lead to look at, not proof.
@@ -283,28 +288,64 @@ function visitor(page, did) {
 }
 
 // What the visitor did, as plan steps it should have produced.
+// `link`: a click on a web link that went somewhere, which must be found again on replay.
 function expectedSteps(did) {
   const want = [];
   for (const d of did) {
-    if (['cookies', 'link', 'newtab', 'search-open', 'search-missed', 'menu-toggle'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`});
+    if (['cookies', 'search-open', 'search-missed', 'menu-toggle'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`});
+    if (['link', 'newtab'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`, link: !!d.navigated});
     if (d.kind === 'menu') {
       if (d.how === 'pointing') want.push({action: 'hover', why: `menu opened by pointing: ${d.what}`});
-      want.push({action: 'click', why: `menu: ${d.what}`});
+      want.push({action: 'click', why: `menu: ${d.what}`, link: !!d.navigated});
     }
-    if (d.kind === 'search') want.push({action: 'type', why: 'search for "help"', text: 'help'});
+    if (d.kind === 'search') want.push({action: 'type', why: 'search for "help"', text: 'help', search: true});
   }
   return want;
 }
 
-// Compares the plan's steps with what the visitor did, in order; returns what's missing.
-function missingSteps(steps, did) {
-  const missing = [];
+// Matches the plan's steps with what the visitor did, in order: what's missing, and which step is which.
+function matchSteps(steps, did) {
+  const missing = [], matched = [];
   let i = 0;
   for (const w of expectedSteps(did)) {
     const at = steps.findIndex((s, j) => j >= i && s.action === w.action && (w.text == null || s.text === w.text));
-    if (at < 0) missing.push(w.why); else i = at + 1;
+    if (at < 0) missing.push(w.why); else { matched.push({want: w, step: steps[at], at}); i = at + 1; }
   }
-  return missing;
+  return {missing, matched};
+}
+
+// Ids a site generates afresh on each visit (React's "_R_5l7d_", "offer-0-WBVvC"): a plan that uses one
+// breaks next time. The same test Stand-in uses when recording.
+const randomPart = p => p.length >= 4 && ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
+  (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
+const generatedId = id => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r|«r|_r_)/i.test(id) ||
+  id.split(/[-_:.]/).some(randomPart) || (/^[a-zA-Z]{5,8}$/.test(id) && (id.match(/[A-Z]/g) ?? []).length >= 2);
+const idsIn = text => [...(text ?? '').matchAll(/#((?:\\.|[\w-])+)|\[id=["']?([^"'\]]+)/g)].map(m => (m[1] ?? m[2]).replace(/\\/g, ''));
+const describe = t => t?.name ?? t?.label ?? t?.placeholder ?? t?.testId ?? t?.css ?? JSON.stringify(t);
+
+// Things that make a plan fragile even when today's replay happens to work. Each one is a problem Stand-in
+// once had; this keeps checking for them on every site.
+function planIssues(steps, did) {
+  const issues = [];
+  const {matched} = matchSteps(steps, did);
+  for (const s of steps) {
+    const bad = [s.target, s.around].flatMap(t => t && typeof t === 'object' ? [...idsIn(t.css), ...idsIn(t.frame)] : typeof t === 'string' ? idsIn(t) : [])
+      .filter(generatedId);
+    if (bad.length) issues.push(`uses an id that changes on every visit (${bad.join(', ')}) in a ${s.action} step`);
+  }
+  for (const {want, step} of matched) {
+    const t = step.target ?? {};
+    if (want.link && t.role === 'link' && !t.href) issues.push(`link saved without where it goes: "${describe(t)}"`);
+    if (want.link && step.optional) issues.push(`a click the demo needs is optional, so replay may skip it: "${describe(t)}"`);
+  }
+  steps.forEach((s, i) => {
+    const next = steps.slice(i + 1).find(n => n.action !== 'wait');
+    const searched = s.action === 'type' && s.submit && s.text === 'help';
+    if (searched && next?.action === 'waitForStable') issues.push('waits for a chat answer after a search');
+    // The visitor scrolls after searching, so a click straight after pressing Enter came from the key.
+    if (searched && next?.action === 'click') issues.push(`extra click straight after pressing Enter: "${describe(next.target)}"`);
+  });
+  return [...new Set(issues)];
 }
 
 // Every site gets at most this long, so a page that stops responding can't stall the sweep.
@@ -396,8 +437,10 @@ async function checkOneSite(site, kind, {out, headless}, running) {
       const plan = JSON.parse(await readFile(planPath, 'utf8'));
       r.plan = join(name, 'demos', planFile);
       r.planSteps = plan.steps.map(s => s.action);
-      const missing = missingSteps(plan.steps, r.did);
+      const {missing} = matchSteps(plan.steps, r.did);
       if (missing.length) r.problems.push({type: 'plan is missing a step', detail: missing.join('; ')});
+      const fragile = planIssues(plan.steps, r.did);
+      if (fragile.length) r.problems.push({type: 'fragile plan', detail: fragile.join('; ')});
       // Replay as a rehearsal, and check it ends on the page the recording ended on.
       const end = new URL(r.finalUrl);
       const check = {...plan, steps: [...plan.steps,
@@ -431,6 +474,24 @@ async function checkOneSite(site, kind, {out, headless}, running) {
 
 // ---- Run ----
 const args = process.argv.slice(2);
+
+// `--check-plans <folder>`: check the plans an earlier sweep saved, without visiting any site.
+if (args[0] === '--check-plans') {
+  const dir = resolve(args[1] ?? '');
+  const results = JSON.parse(await readFile(join(dir, 'results.json'), 'utf8'));
+  let found = 0;
+  for (const r of results) {
+    if (!r.plan) continue;
+    const plan = JSON.parse(await readFile(join(dir, r.plan), 'utf8').catch(() => 'null'));
+    if (!plan) continue;
+    const issues = [...matchSteps(plan.steps, r.did).missing.map(m => `missing step: ${m}`), ...planIssues(plan.steps, r.did)];
+    if (issues.length) found++;
+    console.log(`${r.site.padEnd(24)} ${issues.length ? issues.join('\n' + ' '.repeat(25)) : 'ok'}`);
+  }
+  console.log(`\n${found} of ${results.filter(r => r.plan).length} plans have something to look at.`);
+  process.exit(0);
+}
+
 const headless = args.includes('--headless');
 const jobsAt = args.indexOf('--jobs');
 const jobs = jobsAt >= 0 ? Math.max(1, +args[jobsAt + 1] || 1) : 1;
