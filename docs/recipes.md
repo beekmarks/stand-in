@@ -45,6 +45,9 @@ site opens a pop-up window (a sign-in window, say), finish there and click back 
 pressing Shift twice only works in the recorded tab.
 If an embedded part of the page doesn't respond, click the main page and try again.
 
+A link to another app (an email address, a phone number or a text message) makes Chrome ask whether to
+open that app; until you answer, the page can't hear Shift. Answer the prompt, then try again.
+
 If it still does nothing, use the terminal instead: click in the Stand-in terminal in VS Code
 and press **Enter** to start (Chrome comes to the front), then click back in the terminal and press
 **Enter** again to stop and save.

@@ -1,0 +1,16 @@
+{
+  "note": "Popular public websites for npm run site-sweep, by kind. Only pages anyone can open without signing in; no adult sites. The sweep browses, opens menus, follows links and searches for \"help\"; it never signs in, buys or submits forms other than a search.",
+  "sites": {
+    "search": ["google.com", "bing.com", "duckduckgo.com", "yahoo.com", "ecosia.org", "startpage.com", "baidu.com"],
+    "reference": ["wikipedia.org", "developer.mozilla.org", "stackoverflow.com", "w3schools.com", "learn.microsoft.com", "docs.python.org", "nodejs.org", "react.dev", "britannica.com", "archive.org", "imdb.com", "docs.github.com"],
+    "news": ["bbc.com", "cnn.com", "nytimes.com", "theguardian.com", "reuters.com", "apnews.com", "washingtonpost.com", "npr.org", "foxnews.com", "forbes.com", "usatoday.com", "nbcnews.com", "aljazeera.com", "espn.com", "weather.com", "accuweather.com"],
+    "shopping": ["amazon.com", "ebay.com", "walmart.com", "target.com", "bestbuy.com", "etsy.com", "ikea.com", "homedepot.com", "costco.com", "apple.com", "samsung.com", "nike.com", "wayfair.com", "lowes.com"],
+    "finance": ["fidelity.com", "vanguard.com", "schwab.com", "chase.com", "bankofamerica.com", "wellsfargo.com", "paypal.com", "americanexpress.com", "robinhood.com", "nerdwallet.com", "investopedia.com", "finance.yahoo.com"],
+    "travel": ["booking.com", "expedia.com", "airbnb.com", "tripadvisor.com", "delta.com", "united.com", "marriott.com", "kayak.com"],
+    "government": ["usa.gov", "irs.gov", "weather.gov", "nasa.gov", "cdc.gov", "nih.gov", "ssa.gov", "gov.uk"],
+    "education": ["harvard.edu", "mit.edu", "khanacademy.org", "coursera.org", "ted.com"],
+    "software": ["microsoft.com", "github.com", "gitlab.com", "atlassian.com", "salesforce.com", "adobe.com", "zoom.us", "slack.com", "notion.so", "dropbox.com", "openai.com", "anthropic.com", "figma.com", "canva.com", "shopify.com", "hubspot.com", "stripe.com", "cloudflare.com", "oracle.com", "ibm.com", "mozilla.org", "wordpress.com"],
+    "media": ["youtube.com", "reddit.com", "twitch.tv", "spotify.com", "pinterest.com", "nationalgeographic.com", "medium.com", "news.ycombinator.com"],
+    "local": ["craigslist.org", "zillow.com", "indeed.com", "yelp.com"]
+  }
+}

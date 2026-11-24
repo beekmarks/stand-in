@@ -49,7 +49,8 @@
     "test": "node --test test/*.test.cjs",
     "package": "vsce package",
     "package:skill": "node scripts/package-skill.cjs",
-    "site-check": "node scripts/site-check.mjs"
+    "site-check": "node scripts/site-check.mjs",
+    "site-sweep": "node scripts/site-sweep.mjs"
   },
   "dependencies": {
     "mediabunny": "1.65.2",

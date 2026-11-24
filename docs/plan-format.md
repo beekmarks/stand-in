@@ -37,7 +37,15 @@ web components (open shadow DOM).
 
 Recording picks the most readable target it can: a label, placeholder or role and name, then a unique
 test id, then a form `name`, then CSS. When several elements share a role and name (such as "Read
-more" on every card), it adds `nth`.
+more" on every card), it adds `nth`. A long name, such as a headline, is shortened to its first few
+words. A link also gets `href`, where it goes as written in the page: on replay, when several links share
+a name, the one with the same `href` is used, and when no link has the name any more, the link with the
+same `href` is. Ids that a site generates afresh on each visit (such as React's `_R_5l7d_`) are never
+used.
+
+Replay waits for any visible match, so a hidden copy of an element (in a mobile menu, say) doesn't hold
+it up. A link or button in a menu that's on screen but marked hidden from screen readers (`aria-hidden`)
+is still found.
 
 ## Actions
 
@@ -62,7 +70,8 @@ more" on every card), it adds `nth`.
 Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Optional steps that can't be done are
 skipped with a note in the terminal. Recording marks clicks that close a pop-up, cookie notice or banner
 as `"optional": true, "timeout": 3000`, since sites often don't show them again. When you click a link in a
-menu that opened because you pointed at a nav item, recording adds a `hover` step for that nav item first.
+menu that opened because you pointed at a nav item, recording adds an optional `hover` step for that nav
+item first.
 On replay, if a step's target is hidden in a closed menu, Stand-in points at (or clicks) the item that
 opens it, so older plans without the `hover` step still work. Password input is not captured;
 replace `SET-ME` placeholders only after reviewing the plan and the sensitivity of the value. Captured

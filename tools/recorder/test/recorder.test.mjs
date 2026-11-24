@@ -517,6 +517,30 @@ test('links in menus that open on hover or click are recorded and replayed', {sk
   } finally { await run.close(); }
 });
 
+test('recording and replay work on a site that switches off eval', {skip: process.platform === 'win32', timeout: 90000}, async () => {
+  // Like americanexpress.com, which replaces eval with one that throws.
+  const run = await liveCli('no-eval', `<script>window.eval = function monkeypatchedEval() { throw new Error('eval is disabled'); };</script>
+    <button onclick="this.textContent = 'Clicked'">Click me</button>`);
+  const {page, cwd} = run;
+  try {
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Click me'}).click();
+    await page.waitForTimeout(800);
+    await doubleShift(page);
+    const [code] = await run.exited;
+    assert.equal(code, 0, run.output);
+    assert.doesNotMatch(run.output, /eval is disabled/);
+    const [planName] = await readdir(join(cwd, 'demos'));
+    const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', join(cwd, 'demos', planName),
+      '--headless', '--rehearse'], {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stderr.on('data', data => { output += data; });
+    const [replayCode] = await once(child, 'close');
+    assert.equal(replayCode, 0, output);
+  } finally { await run.close(); }
+});
+
 test('Ctrl+C while recording saves the video and plan instead of losing them', {skip: process.platform === 'win32', timeout: 60000}, async () => {
   const run = await liveCli('ctrl-c', '<button onclick="this.textContent=\'Clicked\'">Click me</button>', [],
     {elsewhere: true});
@@ -813,6 +837,203 @@ customElements.define('code-box', class extends HTMLElement {
     '<div class="editor"><div class="content" contenteditable="true" style="min-height:40px;border:1px solid #999"></div></div>'; }
 });
 </script>`;
+
+test('pointing that reveals a menu drawn elsewhere on the page is recorded, typing suggestions are not', {timeout: 60000}, async () => {
+  // "Locations" draws its menu at the end of the page when pointed at, with nothing linking the two; the
+  // search box shows suggestions as you type.
+  const html = `<nav style="padding:10px"><button id="loc">Locations</button></nav>
+    <input aria-label="Find" style="margin:10px"><div id="suggest"></div>
+    <script>
+      document.querySelector('#loc').addEventListener('mouseenter', () => {
+        if (document.querySelector('.portal')) return;
+        const menu = document.createElement('div');
+        menu.className = 'portal';
+        menu.style = 'position:absolute;top:40px;left:10px;background:#eee;padding:10px';
+        menu.innerHTML = '<a href="#dallas" onclick="document.body.dataset.went = 1">Dallas</a>';
+        document.body.append(menu);
+      });
+      document.querySelector('input').addEventListener('input', e => {
+        document.querySelector('#suggest').innerHTML = '<a href="#s">' + e.target.value + ' help</a>';
+      });
+    </script>`;
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(html); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'portal-menu.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'portal-menu.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Locations'}).hover();
+    await page.waitForTimeout(400);
+    await page.getByRole('link', {name: 'Dallas'}).click();
+    await page.waitForTimeout(300);
+    await page.getByLabel('Find').click();
+    await page.keyboard.type('get', {delay: 30});
+    await page.waitForTimeout(400);
+    await page.getByRole('link', {name: 'get help'}).click();
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps.map(s => `${s.action} ${s.target?.name ?? s.target?.label ?? ''}`.trim()),
+      ['hover Locations', 'click Dallas', 'type Find', 'click get help'], JSON.stringify(steps));
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('links are found by where they go when names repeat or change', {timeout: 60000}, async () => {
+  const pages = {
+    '/': `<header><a href="/promo">Warnings</a></header>
+      <main><a href="/warnings">Warnings</a> <a href="/dallas">Downtown Dallas Sunny 61°</a>
+      <a href="/start?_ga=2.1.2.3">Get started</a> <a href="/start/now?utm_source=nav&amp;id=5&amp;_ga=9.8.7">Get started</a>
+      <p><a id="card-list-items_1-0" href="/index-funds">Investing in Index Funds: Key Benefits and Drawbacks for Long-Term Savers</a></p></main>`,
+  };
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    const path = new URL(req.url, 'http://x').pathname;
+    res.end(pages[path] ?? `<h1>Arrived at ${path}</h1>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'links-by-address.json');
+  try {
+    // Recording keeps each link's address.
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'links-by-address.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(url);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('link', {name: 'Get started'}).nth(1).click();
+    await page.waitForURL(/start\/now/);
+    await page.goBack();
+    await page.getByRole('link', {name: /Index Funds/}).click();
+    await page.waitForURL(/index-funds/);
+    await page.goBack();
+    await page.locator('main').getByRole('link', {name: 'Warnings'}).click();
+    await page.waitForURL(/warnings/);
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const [start, headline, click] = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    // Tracking codes are left out of the address; other parts of it stay.
+    assert.equal(start.target.href, '/start/now?id=5', JSON.stringify(start));
+    // A long headline is saved by its start and where it goes, not by its place in a list.
+    assert.deepEqual(headline.target, {role: 'link', name: 'Investing in Index Funds: Key Benefits and Drawbacks for', href: '/index-funds'});
+    assert.equal(click.target.href, '/warnings', JSON.stringify(click));
+
+    // Replay picks the "Warnings" link that goes to the same place, not the first one on the page.
+    const {Actor} = await import('../record.mjs');
+    const replayPage = await ctx.newPage();
+    const actor = new Actor(replayPage, {viewport: {width: 1000, height: 700}, pace: 'brisk'});
+    await replayPage.goto(url);
+    await actor.run({action: 'click', target: {role: 'link', name: 'Warnings', href: '/warnings'}}, 5000);
+    await replayPage.waitForURL(/\/warnings$/);
+    // A link whose address now carries different tracking codes is still the one picked.
+    await replayPage.goto(url);
+    await replayPage.evaluate(() => { document.querySelectorAll('a')[4].setAttribute('href', '/start/now?utm_source=new&id=5&_ga=1.1'); });
+    await actor.run({action: 'click', target: {role: 'link', name: 'Get started', href: '/start/now?id=5'}}, 5000);
+    await replayPage.waitForURL(/\/start\/now/);
+    // And finds a link whose name has changed since, by where it goes.
+    await replayPage.goto(url);
+    await actor.run({action: 'click', target: {role: 'link', name: 'Downtown Dallas Cloudy 53°', href: '/dallas'}}, 4000);
+    await replayPage.waitForURL(/\/dallas$/);
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('pressing Enter in a form records no extra click on its button', {timeout: 60000}, async () => {
+  const html = `<form onsubmit="event.preventDefault(); document.body.dataset.sent = (+(document.body.dataset.sent || 0) + 1)">
+      <input aria-label="Search" name="q"><button>Search</button></form>
+    <button onclick="document.body.dataset.other = 1">Other</button>`;
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(html); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'enter-submit.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'enter-submit.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByLabel('Search').click();
+    await page.keyboard.type('help', {delay: 30});
+    await page.keyboard.press('Enter');
+    // A pause after searching is an ordinary wait: search results aren't a chat answer next to the box.
+    await page.waitForTimeout(3000);
+    // Space on a focused button isn't a step of its own, so its click is kept.
+    await page.getByRole('button', {name: 'Other'}).focus();
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => document.body.dataset.sent), '1');
+    await doubleShift(page);
+    await done;
+    const all = JSON.parse(await readFile(planPath, 'utf8')).steps;
+    assert.ok(!all.some(s => s.action === 'waitForStable'), JSON.stringify(all));
+    const steps = all.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps.map(s => s.action), ['type', 'click'], JSON.stringify(steps));
+    assert.equal(steps[0].text, 'help');
+    assert.equal(steps[0].submit, true);
+    assert.deepEqual(steps[1].target, {role: 'button', name: 'Other'});
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('capture avoids generated ids and treats clicks in pop-up frames as optional', {timeout: 60000}, async () => {
+  const pages = {
+    '/': `<div id="_R_5l7d_" style="padding:30px;background:#eee;cursor:pointer" onclick="document.body.dataset.panel = 1">Panel</div>
+      <p style="margin:20px">Just some text to read.</p>
+      <iframe id="offer-0-WBVvC" src="/offer" style="position:fixed;bottom:0;left:0;width:320px;height:160px;border:0"></iframe>`,
+    '/offer': '<div style="width:300px;height:140px;background:#c33" onclick="this.dataset.clicked = 1"></div>',
+  };
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(pages[new URL(req.url, 'http://x').pathname] ?? ''); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'generated-ids.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'generated-ids.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.mouse.click(500, 30);
+    await page.getByText('Just some text to read.').click();
+    await page.mouse.click(150, 620);
+    await page.waitForTimeout(600);
+    await doubleShift(page);
+    await done;
+    const clicks = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    assert.equal(clicks.length, 3, JSON.stringify(clicks));
+    // React's ids ("_R_5l7d_") and random tokens ("WBVvC") change on every visit, so they're not used.
+    assert.doesNotMatch(JSON.stringify(clicks), /_R_5l7d_|WBVvC/);
+    assert.ok(!clicks[0].optional);
+    // A click on plain text is incidental: skipped on replay if the text isn't there.
+    assert.equal(clicks[1].optional, true, JSON.stringify(clicks[1]));
+    // The frame floats over the page like a paywall or offer, which may not appear on replay.
+    assert.equal(clicks[2].optional, true, JSON.stringify(clicks[2]));
+    assert.equal(clicks[2].target.frame, 'iframe[src^="/offer"]');
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
 
 test('capture copes with banners, repeated links, web components, frames and selects', {timeout: 60000}, async () => {
   const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(TRICKY_PAGE); });

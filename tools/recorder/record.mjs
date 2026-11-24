@@ -305,8 +305,11 @@ function captureInit() {
   };
   // Ids and class names made up by frameworks or ad scripts ("css-1x2y3z", "offer-0-9OOTW") change between visits.
   // (Also styled-components hashes such as "ieGDnl".)
-  const generated = s => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__/i.test(s) ||
-    s.split(/[-_:.]/).some(p => p.length >= 4 && /\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
+  // React's ids (":r1:", "«r1»", "_R_5l7d_") and random tokens ("WBVvC") change on every visit.
+  const randomPart = p => p.length >= 4 && ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
+    ((p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
+  const generated = s => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r|«r|_r_)/i.test(s) ||
+    s.split(/[-_:.]/).some(randomPart) ||
     (/^[a-zA-Z]{5,8}$/.test(s) && (s.match(/[A-Z]/g) ?? []).length >= 2);
   // Events from inside web components (shadow DOM) are retargeted to the component; use the real element.
   const real = e => e.composedPath?.()[0] ?? e.target;
@@ -346,7 +349,27 @@ function captureInit() {
     const i = same.indexOf(el);
     return same.length > 1 && i > 0 ? {...target, nth: i} : target;
   };
+  // A link also remembers where it goes: that picks the right one when several links share a name ("Home"
+  // in every menu), and still finds it when its name has changed ("Downtown Dallas Cloudy 53°").
+  // Tracking codes ("utm_source", "_ga", "gclid") change on every visit, so they're left out.
+  const TRACKING = /^(utm_|_ga$|_gl$|gclid$|fbclid$|msclkid$|mc_|_hs|amp(DeviceId|SessionId)$|_ics$|irclickid$|ref_?src$|icid$)/i;
+  const untracked = href => {
+    const q = href.indexOf('?');
+    if (q < 0) return href;
+    const [path, rest] = [href.slice(0, q), href.slice(q + 1)];
+    const hash = rest.includes('#') ? rest.slice(rest.indexOf('#')) : '';
+    const kept = rest.replace(/#.*$/, '').split('&').filter(p => p && !TRACKING.test(decodeURIComponent(p.split('=')[0])));
+    return path + (kept.length ? '?' + kept.join('&') : '') + hash;
+  };
   const targetFor = raw => {
+    const t = targetOf(raw);
+    const link = closestAcross(raw, 'a[href]');
+    const written = link?.getAttribute('href');
+    const href = written && untracked(written);
+    if (t && link && href && href.length <= 300 && !/^(#|javascript:)/i.test(href) && !t.css && !t.testId) return {...t, href};
+    return t;
+  };
+  const targetOf = raw => {
     const el = closestAcross(raw, INTERACTIVE) ?? raw;
     const tid = el.getAttribute?.('data-testid');
     // Many sites put the same test id on every item of a list; only a unique one identifies this element.
@@ -372,6 +395,12 @@ function captureInit() {
     const first = clean((el.innerText ?? '').split('\n').find(l => l.trim()));
     if (role && first && first.length <= 100 && first !== name) return {role, name: first};
     if (el.tagName === 'IMG' && clean(el.alt)) return {role: 'img', name: clean(el.alt)};
+    // A long name on one line (a headline or product name): its start, cut at a word, still finds it, since
+    // names match in part. That beats an id that only says where it sits in a list ("card-list-items_1-0").
+    if (role && name && name.length > 60) {
+      const start = name.slice(0, 60).replace(/\s+\S*$/, '');
+      return {role, name: start.length >= 20 ? start : name.slice(0, 60)};
+    }
     if (el.id && !generated(el.id)) return {css: '#' + CSS.escape(el.id)};
     // An unlabelled checkbox or radio button is still known by its form name (and value, in a radio group).
     if (['INPUT', 'BUTTON', 'SELECT'].includes(el.tagName) && el.name) {
@@ -397,7 +426,10 @@ function captureInit() {
       if (/^(BODY|HTML|MAIN)$/.test(n.tagName)) return false;
       if (n.matches('[role=dialog],[role=alertdialog],dialog,[aria-modal=true]')) return true;
       named ||= POPUP.test(`${n.id} ${typeof n.className === 'string' ? n.className : ''} ${n.getAttribute('aria-label') ?? ''}`);
-      if (named && /^(fixed|sticky)$/.test(getComputedStyle(n).position)) return true;
+      if (named && /^(fixed|sticky)$/.test(getComputedStyle(n).position)) {
+        // A site's own header or navigation bar stays on screen too, but it isn't a pop-up.
+        return !n.matches('header,nav,[role=banner],[role=navigation],[role=menubar]');
+      }
     }
     return false;
   };
@@ -427,53 +459,93 @@ function captureInit() {
   // Menus that open when you point at a nav item: remember what was pointed at, so a click inside the menu
   // can be preceded by pointing at the item that opened it (replay can't reach a link in a closed menu).
   let pointed = [];
+  const NAV = 'nav,ul,ol,[role=menubar],[role=navigation],header,body,html';
+  // Where a nav item's menu would be: what it controls, or the wrapper it shares with its menu (a list item).
+  const menuArea = h => {
+    const ids = (h.getAttribute('aria-controls') ?? '').split(/\s+/).filter(Boolean);
+    const controlled = ids.map(id => h.getRootNode().getElementById?.(id) ?? document.getElementById(id)).filter(Boolean);
+    const wrapper = up(h);
+    const wrapper2 = wrapper && !wrapper.matches(NAV) ? up(wrapper) : null;
+    const shared = [wrapper2, wrapper].find(w => w && !w.matches(NAV));
+    return [...controlled, ...(shared ? [shared] : [])];
+  };
+  const SHOWN_ITEMS = 'a[href],button,input,[role=menuitem],[role=link],[role=button]';
+  const visibleIn = areas => areas.reduce((n, a) => n + [...a.querySelectorAll(SHOWN_ITEMS)].filter(x => {
+    const r = x.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(x).visibility !== 'hidden';
+  }).length, 0);
+  // What could be clicked when each item was pointed at, so a click on something that wasn't there yet
+  // shows it was revealed by pointing, even when the menu is drawn elsewhere on the page. Taken at most every
+  // 300 ms, to stay quick on big pages.
+  const canSee = el => el.checkVisibility?.({checkOpacity: true, checkVisibilityCSS: true}) ?? true;
+  // On screen and not clipped or covered: the item itself is what's at its centre. (Something scrolled out
+  // of view still counts: scrolling doesn't reveal menus.)
+  const reallyShown = el => {
+    if (!canSee(el)) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return true;
+    const hit = document.elementFromPoint(x, y);
+    return !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+  };
+  let shown = {t: 0, set: null};
+  const shownNow = () => {
+    if (Date.now() - shown.t > 300) shown = {t: Date.now(), set: new WeakSet([...document.querySelectorAll(SHOWN_ITEMS)].filter(reallyShown))};
+    return shown.set;
+  };
+  let lastAction = 0;
+  addEventListener('keydown', e => { if (e.isTrusted && e.key !== 'Shift') { lastAction = Date.now(); shown.t = 0; } }, true);
+  addEventListener('wheel', e => { if (e.isTrusted) { lastAction = Date.now(); shown.t = 0; } }, {capture: true, passive: true});
   addEventListener('mouseover', e => {
     if (!e.isTrusted) return;
     const el = closestAcross(real(e), INTERACTIVE);
     if (!el || el === pointed.at(-1)?.el) return;
-    pointed = [...pointed.filter(p => p.el !== el), {el, t: Date.now()}].slice(-6);
+    const areas = menuArea(el);
+    pointed = [...pointed.filter(p => p.el !== el), {el, t: Date.now(), areas, before: visibleIn(areas), seen: shownNow()}].slice(-6);
   }, true);
-  // The nav item most recently pointed at (before the clicked item) whose menu holds the clicked item.
+  // The item most recently pointed at (since your last click or key press) that revealed the clicked item.
   const openedBy = el => {
-    for (const {el: h, t} of [...pointed].reverse()) {
-      if (h === el || Date.now() - t > 20000) continue;
-      const found = opens(h, el);
-      if (found) return found;
+    for (const p of [...pointed].reverse()) {
+      if (p.el === el || p.t < lastAction || Date.now() - p.t > 20000 || !p.el.isConnected || p.el.contains(el) || el.contains(p.el)) continue;
+      // Its menu holds the clicked item, and pointing showed something new there.
+      if (p.areas.some(a => a.contains(el)) && visibleIn(p.areas) > p.before) return p.el;
+      // Or the clicked item wasn't there to click when this was pointed at (a menu drawn elsewhere).
+      // (Not just after a click or key, while what that brought up is still appearing.)
+      if (p.seen && p.t - lastAction > 600 && !p.seen.has(el) && el.matches(SHOWN_ITEMS) && canSee(el)) return p.el;
     }
     return null;
   };
-  const opens = (h, el) => {
-    if (!h.isConnected || h.contains(el) || el.contains(h)) return null;
-    const ids = (h.getAttribute('aria-controls') ?? '').split(/\s+/).filter(Boolean);
-    for (let n = el; n; n = up(n)) if (n.id && ids.includes(n.id)) return h;
-    // The usual layout: the nav item and its menu share a wrapper, such as a list item.
-    const wrapper = up(h);
-    const wrapper2 = wrapper && !wrapper.matches('nav,ul,ol,[role=menubar],[role=navigation],header,body') ? up(wrapper) : null;
-    const inside = w => w && !w.matches('nav,ul,ol,[role=menubar],[role=navigation],header,body,html') && w.contains(el);
-    const shared = inside(wrapper) ? wrapper : inside(wrapper2) ? wrapper2 : null;
-    if (!shared) return null;
-    // Only real menus: the item pointed at says it opens one, or the clicked item is in a drop-down box.
-    if (h.matches('[aria-haspopup],[aria-expanded]')) return h;
-    for (let n = up(el); n && n !== shared; n = up(n))
-      if (/^(absolute|fixed)$/.test(getComputedStyle(n).position)) return h;
-    return null;
-  };
+  // Enter in a form, or on a focused button, makes the browser click the button. That click comes from the
+  // key, which is already a step; recording it too would click again on replay. (Space isn't a step, so a
+  // click from Space is kept.)
+  let lastKey = null;
+  addEventListener('keydown', e => { if (e.isTrusted) lastKey = {key: e.key, t: Date.now()}; }, true);
   addEventListener('click', e => {
     if (!e.isTrusted) return;
     if (down?.dragged) { down = null; return; }
+    if (e.detail === 0 && lastKey?.key === 'Enter' && Date.now() - lastKey.t < 1000) return;
     const t = real(e);
     if (t.tagName === 'SELECT' || t.tagName === 'OPTION') return;
     const el = closestAcross(t, INTERACTIVE) ?? t;
     const menu = openedBy(el);
+    lastAction = Date.now();
+    shown.t = 0;
     if (menu) send({kind: 'hover', target: targetFor(menu)});
+    // A click on plain content (not a link, button or anything the site made clickable) is incidental, such
+    // as clicking to focus the page; if that content isn't there on replay, carry on.
+    const plain = !closestAcross(t, INTERACTIVE) && getComputedStyle(t).cursor !== 'pointer';
     send({kind: 'click', target: targetFor(t), button: e.button === 2 ? 'right' : undefined,
-      dismiss: isDismiss(el, nameOf(el)) || undefined});
+      dismiss: isDismiss(el, nameOf(el)) || plain || undefined});
   }, true);
   addEventListener('input', e => {
     const el = real(e);
     if (!e.isTrusted || !isText(el)) return;
     const secret = el.type === 'password';
-    send({kind: 'input', target: targetFor(el), value: secret ? '' : (el.isContentEditable ? el.innerText : el.value), secret});
+    // A search box: what you type there brings up results, not a chat answer next to the box.
+    const words = `${el.type ?? ''} ${el.getAttribute('role') ?? ''} ${el.name ?? ''} ${el.id ?? ''} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder ?? ''}`;
+    const search = el.type === 'search' || el.closest('[role=search],form[role=search]') != null || /\bsearch|searchbox|\bq\b|query|\bfind\b/i.test(words);
+    send({kind: 'input', target: targetFor(el), value: secret ? '' : (el.isContentEditable ? el.innerText : el.value), secret, search: search || undefined});
   }, true);
   addEventListener('change', e => {
     const el = real(e);
@@ -519,8 +591,9 @@ class StepBuilder {
   same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   flush() {
     if (!this.typing) return;
-    const {target, text, submit, secret} = this.typing;
+    const {target, text, submit, secret, search} = this.typing;
     const step = {action: 'type', target, text: secret ? 'SET-ME: password (not captured)' : text, clear: true};
+    if (search) (this.searchSteps ??= new WeakSet()).add(step);
     if (submit) step.submit = true;
     if (secret) this.secrets++;
     const prev = this.steps.at(-1);
@@ -538,8 +611,10 @@ class StepBuilder {
     const prev = this.steps.at(-1);
     if (!(g > 2500 && prev && prev.action !== 'wait' && prev.action !== 'waitForStable')) return;
     const before = this.steps.at(-2);
-    const field = prev.action === 'type' && prev.submit ? prev.target
-      : ['click', 'press'].includes(prev.action) && before?.action === 'type' && !before.submit ? before.target : null;
+    const asked = prev.action === 'type' && prev.submit ? prev
+      : ['click', 'press'].includes(prev.action) && before?.action === 'type' && !before.submit ? before : null;
+    // A search box brings up results, which take a fixed wait like any page; only a chat box gets an answer.
+    const field = asked && !this.searchSteps?.has(asked) ? asked.target : null;
     const typed = String((prev.action === 'type' ? prev : before)?.text ?? '');
     const navigated = this.navT >= this.lastT && this.navT <= t;
     if (field && !navigated && !typed.startsWith('SET-ME')) {
@@ -573,7 +648,7 @@ class StepBuilder {
     switch (ev.kind) {
       case 'input':
         if (this.typing && !this.same(this.typing.target, target)) this.flush();
-        if (!this.typing) this.typing = {target, text: ev.value, secret: ev.secret};
+        if (!this.typing) this.typing = {target, text: ev.value, secret: ev.secret, search: ev.search};
         else this.typing.text = ev.value;
         break;
       case 'enter':
@@ -603,7 +678,8 @@ class StepBuilder {
       case 'hover': {
         const prev = this.steps.at(-1);
         if (!(['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)))
-          this.steps.push({action: 'hover', target, ms: 500});
+          // Only a help for the next click (which opens the menu itself if it must), so not worth failing over.
+          this.steps.push({action: 'hover', target, ms: 500, optional: true, timeout: 3000});
         break;
       }
       case 'drag': this.steps.push({action: 'drag', target, to: withFrame(ev.to)}); break;
@@ -640,6 +716,12 @@ class Actor {
     this.k = PACE[plan.pace ?? 'normal'] ?? 1;
     const {width, height} = plan.viewport;
     this.mouse = {x: width * 0.55, y: height * 0.6};
+    // When the page last started and finished going to a new address, so steps can wait for page loads.
+    this.navStarted = 0; this.navCommitted = 0;
+    page.on('request', r => {
+      try { if (r.isNavigationRequest() && r.frame() === page.mainFrame()) this.navStarted = Date.now(); } catch {}
+    });
+    page.on('framenavigated', f => { if (f === page.mainFrame()) this.navCommitted = Date.now(); });
   }
   wait(ms) { return this.page.waitForTimeout(Math.round(ms * this.k)); }
 
@@ -680,17 +762,56 @@ class Actor {
       const escaped = words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       loc = full.or(this.locator({...target, name: new RegExp(`^\\s*${escaped}\\b`, 'i')}));
     }
-    await this.waitVisible(loc.first(), target, timeout);
-    if (loc !== full && await full.first().isVisible().catch(() => false)) loc = full;
+    // Wait for any visible match, not just the first: pages often have a hidden copy too (a mobile menu).
+    const visible = l => target?.nth != null ? l.first() : l.filter({visible: true}).first();
+    // A link is also found by where it goes, in case its name has changed.
+    // (By the start of the address up to any "?", since links may carry tracking codes that change.)
+    const base = typeof target === 'object' && target.href ? target.href.split('?')[0] : '';
+    const byHref = typeof target === 'object' && target.href && target.role
+      ? this.locator({css: base.length > 1 ? `a[href^=${JSON.stringify(base)}]` : `a[href=${JSON.stringify(target.href)}]`, frame: target.frame}) : null;
+    // Some sites leave an open menu marked hidden from screen readers (aria-hidden), which hides it from a
+    // search by role and name even though it's on screen.
+    const marked = typeof target === 'object' && target.role && target.nth == null ? this.locator(target, {hidden: true}) : null;
+    let any = loc;
+    for (const extra of [byHref, marked]) if (extra) any = any.or(extra);
+    await this.waitVisible(visible(any), target, timeout);
+    if (loc !== full && await visible(full).isVisible().catch(() => false)) loc = full;
     // A role name matches as a substring ("Code" also matches "Codespaces"), so an exact name wins.
     if (typeof target === 'object' && target.role && typeof target.name === 'string' && !target.exact && target.nth == null) {
       const exact = this.locator({...target, exact: true});
-      if (await exact.first().isVisible().catch(() => false)) loc = exact;
+      if (await visible(exact).isVisible().catch(() => false)) loc = exact;
+    }
+    if (!await visible(loc).isVisible().catch(() => false)) {
+      if (byHref && await visible(byHref).isVisible().catch(() => false)) {
+        log(`   found it by where it goes (${target.href}); its name has changed`);
+        loc = byHref;
+      } else if (marked) loc = marked;
     }
     const count = await loc.count();
-    if (count > 1) {
-      // Prefer the first *visible* match rather than failing on ambiguity.
-      for (let i = 0; i < count; i++) if (await loc.nth(i).isVisible()) { loc = loc.nth(i); break; }
+    if (count > 1 && target?.nth == null) {
+      // Several matches: the visible one that goes to the recorded address, else the first visible one.
+      let first = null, same = null;
+      for (let i = 0; i < count && !same; i++) {
+        const m = loc.nth(i);
+        if (!await m.isVisible().catch(() => false)) continue;
+        first ??= m;
+        if (byHref && await m.evaluate((el, want) => {
+          const href = el.closest('a')?.getAttribute('href');
+          if (!href) return false;
+          // The same address, ignoring tracking codes and the part after "#"; or at least the same page.
+          const norm = h => {
+            try {
+              const u = new URL(h, location.href);
+              for (const k of [...u.searchParams.keys()])
+                if (/^(utm_|_ga$|_gl$|gclid$|fbclid$|msclkid$|mc_|_hs|amp(DeviceId|SessionId)$|_ics$|irclickid$|ref_?src$|icid$)/i.test(k)) u.searchParams.delete(k);
+              return {full: u.origin + u.pathname + u.search, page: u.origin + u.pathname};
+            } catch { return {full: h, page: h}; }
+          };
+          const a = norm(href), b = norm(want);
+          return a.full === b.full || a.page === b.page;
+        }, target.href).catch(() => false)) same = m;
+      }
+      loc = same ?? first ?? loc.first();
     } else loc = loc.first();
     await this.bringIntoView(loc);
     const box = await this.trueBox(loc);
@@ -773,7 +894,7 @@ class Actor {
     // Point at it: most menus open on hover.
     await this.glide(box.x + box.width / 2, box.y + box.height / 2);
     await this.wait(700);
-    if (await this.locator(target).first().isVisible().catch(() => false)) return true;
+    if (await this.locator(target, {hidden: true}).filter({visible: true}).first().isVisible().catch(() => false)) return true;
     // Some open on a click instead. Click only if that can't leave the page: a button, a menu toggle or
     // a link to "#".
     const toggles = await opener.evaluate(n => !n.matches('a[href]') || n.matches('[aria-haspopup],[aria-expanded]') ||
@@ -795,14 +916,23 @@ class Actor {
     let r = await h.evaluate(e => {
       const whole = e.getBoundingClientRect();
       const parts = [...e.getClientRects()].filter(b => b.width > 1 && b.height > 1);
-      if (parts.length < 2) return {x: whole.x, y: whole.y, width: whole.width, height: whole.height};
-      const hits = b => {
-        const t = e.ownerDocument.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+      const at = (x, y) => {
+        const t = e.ownerDocument.elementFromPoint(x, y);
         return !!t && (t === e || e.contains(t));
       };
-      const byArea = [...parts].sort((a, b) => b.width * b.height - a.width * a.height);
-      const b = byArea.find(hits) ?? byArea[0];
-      return {x: b.x, y: b.y, width: b.width, height: b.height};
+      const hits = b => at(b.x + b.width / 2, b.y + b.height / 2);
+      const byArea = [...(parts.length ? parts : [whole])].sort((a, b) => b.width * b.height - a.width * a.height);
+      const b = byArea.find(hits);
+      if (b) return {x: b.x, y: b.y, width: b.width, height: b.height};
+      // The centre is covered by something else (a caption laid over a link, say): aim at a part that isn't.
+      for (const box of byArea) {
+        for (const [fx, fy] of [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75], [0.15, 0.3], [0.85, 0.7], [0.1, 0.5], [0.9, 0.5]]) {
+          const x = box.x + box.width * fx, y = box.y + box.height * fy;
+          if (at(x, y)) return {x: x - 2, y: y - 2, width: 4, height: 4};
+        }
+      }
+      const c = byArea[0];
+      return {x: c.x, y: c.y, width: c.width, height: c.height};
     });
     for (let f = await h.ownerFrame(); f?.parentFrame(); f = f.parentFrame()) {
       const fe = await f.frameElement();
@@ -1107,7 +1237,10 @@ class Actor {
       }
       case 'wait': await p.waitForTimeout(step.ms ?? 1000); break;
       case 'waitFor':
-        if (step.target) await this.locator(step.target).first().waitFor({state: step.state ?? 'visible', timeout});
+        if (step.target) {
+          const all = this.locator(step.target);
+          await ((step.state ?? 'visible') === 'visible' ? all.filter({visible: true}) : all).first().waitFor({state: step.state ?? 'visible', timeout});
+        }
         else if (step.url) await p.waitForURL(step.url, {timeout});
         else await p.waitForLoadState(step.state ?? 'networkidle', {timeout});
         break;
@@ -1156,10 +1289,18 @@ class Actor {
       uncheck: 550, goto: 600, caption: 250, highlight: 300, move: 150}[step.action] ?? 0);
   }
 
-  // After anything that might navigate: let the new page settle and put the cursor back.
-  async settle() {
+  // After anything that might navigate: let the new page settle and put the cursor back. A click that opens
+  // a new page starts loading a moment later, so look for that first; otherwise the next step would act on
+  // the old page while it's being replaced. `since`: when the step began.
+  async settle(since = Date.now()) {
+    for (let i = 0; i < 6 && this.navStarted < since; i++) await sleep(100);
+    if (this.navStarted >= since) {
+      const deadline = Date.now() + 15000;
+      while (this.navCommitted < this.navStarted && Date.now() < deadline) await sleep(100);
+    }
     try { await this.page.waitForLoadState('load', {timeout: 15000}); } catch {}
-    try { await this.page.evaluate(() => document.fonts?.ready); } catch {}
+    // Let web fonts finish, but not forever: on some pages a font never finishes loading.
+    try { await this.page.evaluate(() => Promise.race([document.fonts?.ready, new Promise(r => setTimeout(r, 3000))])); } catch {}
     try { await this.page.mouse.move(this.mouse.x, this.mouse.y); } catch {}
   }
 }
@@ -1230,9 +1371,17 @@ const NET_ERRORS = {
   ERR_CERT_AUTHORITY_INVALID: 'the site\'s security certificate is not trusted.',
   ERR_TUNNEL_CONNECTION_FAILED: 'the network proxy could not reach it. Check the address and your connection.',
   ERR_PROXY_CONNECTION_FAILED: 'the network proxy is not responding.',
+  ERR_CONNECTION_RESET: 'the connection was cut off. Try again. If it keeps happening, the site may refuse browsers controlled by software, as some do.',
+  ERR_CONNECTION_CLOSED: 'the site closed the connection. Try again. If it keeps happening, the site may refuse browsers controlled by software, as some do.',
+  ERR_HTTP2_PROTOCOL_ERROR: 'the connection to the site broke off. Try again. If it keeps happening, the site may refuse browsers controlled by software, as some do.',
+  ERR_EMPTY_RESPONSE: 'the site sent nothing back. Try again later.',
+  ERR_HTTP_RESPONSE_CODE_FAILURE: 'the site answered with an error page. Try again later.',
+  ERR_TIMED_OUT: 'the site did not respond.',
+  ERR_TOO_MANY_REDIRECTS: 'the site kept sending Chrome to another address. Try opening it in your usual browser first.',
+  ERR_SSL_PROTOCOL_ERROR: 'a secure connection to the site couldn\'t be made.',
 };
 function explainNavigation(error, url) {
-  const code = /net::(ERR_[A-Z_]+)/.exec(error?.message ?? '')?.[1];
+  const code = /net::(ERR_[A-Z0-9_]+)/.exec(error?.message ?? '')?.[1];
   if (code) return `Couldn't open ${url}: ${NET_ERRORS[code] ?? `Chrome reported ${code}.`}`;
   return `Couldn't open ${url}: ${explainError(error)}`;
 }
@@ -1642,6 +1791,19 @@ async function confirmSignedInReplay(plan, planText, approved) {
   if (plan.profileDir) await approvePlan(plan.profileDir, planText).catch(() => {});
 }
 
+// Some sites switch off JavaScript's eval (American Express replaces it with one that throws), which
+// Stand-in's own small scripts in the page need. Keep the real one for those, and give the site's code the
+// site's version, so the site's protection still applies to everything else.
+function keepEvalInit() {
+  const realEval = window.eval;
+  let siteEval = realEval;
+  try {
+    Object.defineProperty(window, 'eval', {configurable: true,
+      get() { return /UtilityScript/.test(new Error().stack ?? '') ? realEval : siteEval; },
+      set(value) { siteEval = value; }});
+  } catch {}
+}
+
 // Chrome records one tab, so the demo stays in one tab: links, forms and scripts that would open a new tab
 // open in this one instead. Real pop-up windows (opened with a size, such as sign-in or payment windows)
 // are left alone, because the site needs them to stay separate.
@@ -1762,7 +1924,7 @@ function liveShortcutInit() {
   // Shift-clicking puts a click between them. Ctrl+Shift+9, the original shortcut, still works.
   const toggle = () =>
     window.__standInLiveToggle().catch(error => console.error(`Stand-in recording control failed: ${error.message}`));
-  const DOUBLE_SHIFT_MS = 400;
+  const DOUBLE_SHIFT_MS = 500;
   let lastShift = 0;
   addEventListener('keydown', e => {
     if (!e.isTrusted) return;
@@ -1911,7 +2073,12 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
   let armed = false, startUrl, error, queue = Promise.resolve();
   await ctx.exposeBinding('__demoCaptureEvent', ({page: source, frame}, event) => {
     if (!armed || source !== page) return;
-    queue = queue.then(async () => builder.add(event, await frameChain(frame))).catch(e => {
+    queue = queue.then(async () => {
+      const chain = await frameChain(frame);
+      // A click in a pop-up shown in its own frame (a paywall or consent window) may not be needed on replay.
+      if (chain && event.kind === 'click' && !event.dismiss && await inPopupFrame(frame)) event = {...event, dismiss: true};
+      return builder.add(event, chain);
+    }).catch(e => {
       error ??= e;
       log(`Could not capture an action: ${e.message}`);
     });
@@ -1931,30 +2098,61 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
       await writeFile(planPath, text, {flag: 'wx'});
       // You recorded this yourself, so replaying it as recorded needs no confirmation.
       if (profileDir) await approvePlan(profileDir, text).catch(() => {});
-      if (error) log(`Saved an incomplete replay plan: ${shown(planPath)}`);
+      // The video is what matters most: a missed action only means the plan may need a step added.
+      if (error) log(`An action couldn't be captured, so the replay plan may be missing a step: ${shown(planPath)}. The video is fine.`);
       if (builder.secrets) log('Password input was not captured; replace SET-ME in the replay plan if needed.');
-      if (error) throw new Error('The video was saved, but some actions could not be captured. Review the incomplete plan.');
     },
   };
+}
+
+// Is this frame (or one it sits in) a pop-up floating over the page: a paywall, offer or consent window?
+// Those may not appear on replay, like any pop-up.
+async function inPopupFrame(frame) {
+  for (let f = frame; f?.parentFrame(); f = f.parentFrame()) {
+    const el = await f.frameElement().catch(() => null);
+    const popup = await el?.evaluate(n => {
+      const POPUP = /cookie|consent|gdpr|banner|modal|popup|pop-up|overlay|lightbox|interstitial|survey|newsletter|promo|offer|paywall|gate|onetrust|didomi|sourcepoint|sp_message|cmp\b|piano|tp-/i;
+      for (let e = n, i = 0; e && e.nodeType === 1 && i < 8; e = e.parentElement, i++) {
+        if (/^(BODY|HTML)$/.test(e.tagName)) break;
+        if (e.matches('[role=dialog],[role=alertdialog],dialog,[aria-modal=true]')) return true;
+        const named = POPUP.test(`${e.id} ${typeof e.className === 'string' ? e.className : ''} ${e.getAttribute('title') ?? ''} ${e.getAttribute('name') ?? ''}`);
+        if (named && /^(fixed|sticky|absolute)$/.test(getComputedStyle(e).position)) return true;
+        if (e === n && named) return true;
+      }
+      return false;
+    }).catch(() => false);
+    await el?.dispose();
+    if (popup) return true;
+  }
+  return false;
 }
 
 async function frameChain(frame) {
   const chain = [];
   for (let f = frame; f?.parentFrame(); f = f.parentFrame()) {
-    const el = await f.frameElement();
+    // A frame that is navigating or being removed can't be inspected; fall back to its address.
+    const el = await f.frameElement().catch(() => null);
+    if (!el) {
+      const src = f.url().split(/[?#]/)[0];
+      chain.unshift(src && !/^(about|data|blob|javascript):/i.test(src) ? `iframe[src^=${JSON.stringify(src)}]` : 'iframe');
+      continue;
+    }
     chain.unshift(await el.evaluate(n => {
-      // Ad and embed scripts often give frames made-up ids ("offer-0-d4dZB") that change on every visit.
-      const made = s => /\d{3,}|[a-f0-9]{8,}|__/i.test(s) || s.split(/[-_:.]/).some(p => p.length >= 4 && /\d/.test(p) && /[A-Z]/.test(p.slice(1)));
+      // Ad and embed scripts often give frames made-up ids ("offer-0-WBVvC") that change on every visit.
+      const made = s => /\d{3,}|[a-f0-9]{8,}|__|^(?::r|«r|_r_)/i.test(s) || s.split(/[-_:.]/).some(p => p.length >= 4 &&
+        ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
+         ((p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p))));
       const tag = n.tagName.toLowerCase(), q = v => JSON.stringify(v);
-      if (n.id && !made(n.id)) return `#${CSS.escape(n.id)}`;
       if (n.getAttribute('title')) return `${tag}[title=${q(n.getAttribute('title'))}]`;
+      if (n.id && !made(n.id)) return `#${CSS.escape(n.id)}`;
       if (n.getAttribute('name') && !made(n.getAttribute('name'))) return `${tag}[name=${q(n.getAttribute('name'))}]`;
       const src = n.getAttribute('src');
       if (src && !/^(about|data|blob|javascript):/i.test(src)) return `${tag}[src^=${q(src.split(/[?#]/)[0])}]`;
       if (n.id) return `#${CSS.escape(n.id)}`;
       const all = [...document.querySelectorAll(tag)];
       return all.length > 1 ? `${tag} >> nth=${all.indexOf(n)}` : tag;
-    }));
+    }).catch(() => 'iframe'));
+    await el.dispose().catch(() => {});
   }
   return chain.length === 0 ? null : chain.length === 1 ? chain[0] : chain;
 }
@@ -2086,6 +2284,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
         }
       }
     }
+    await ctx.addInitScript(keepEvalInit);
     await ctx.addInitScript(overlayInit, plan.overlay);
     await ctx.addInitScript(oneTabInit);
     if (!replay) {
@@ -2146,10 +2345,11 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
         const timeout = step.timeout ?? plan.timeout;
         try {
           await Promise.race([crash, (async () => {
+            const began = Date.now();
             await actor.run(step, timeout);
             if (step.action === 'waitForStable' && step.around && step.requireChange !== false && actor.lastWait?.warning)
               throw new AssistantResponseError(actor.lastWait.warning);
-            await actor.settle();
+            await actor.settle(began);
             await actor.wait(step.pauseAfter ?? actor.defaultPauseAfter(step));
           })()]);
         } catch (error) {
@@ -2193,7 +2393,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
   if (failure) throw failure;
 }
 
-export {Actor, captureInit, keepInOneTab, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
+export {Actor, captureInit, keepEvalInit, keepInOneTab, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
   quickMain().catch(async error => {

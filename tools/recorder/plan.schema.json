@@ -60,6 +60,10 @@
               "type": "string",
               "description": "CSS selector."
             },
+            "href": {
+              "type": "string",
+              "description": "For a link: where it goes, as written in the page. Picks the right link when several share a name, and finds it when its name has changed."
+            },
             "exact": {
               "type": "boolean",
               "description": "Exact (case-sensitive, whole-string) match for name/text/label/placeholder."

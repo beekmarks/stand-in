@@ -152,9 +152,18 @@ function run(args, cwd, env) {
 
 // Stand-in's start/stop shortcut, the way a person presses it.
 async function doubleShift(page) {
-  await page.keyboard.press('Shift');
-  await page.waitForTimeout(120);
-  await page.keyboard.press('Shift');
+  // Like a keyboard: each key event carries the time it was pressed, so a page busy loading can't make the
+  // two taps look further apart than they were.
+  const cdp = await page.context().newCDPSession(page);
+  const now = Date.now() / 1000;
+  const key = {key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16};
+  await Promise.all([
+    cdp.send('Input.dispatchKeyEvent', {type: 'rawKeyDown', ...key, timestamp: now}),
+    cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', ...key, timestamp: now + 0.06}),
+    cdp.send('Input.dispatchKeyEvent', {type: 'rawKeyDown', ...key, timestamp: now + 0.18}),
+    cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', ...key, timestamp: now + 0.24}),
+  ]);
+  await cdp.detach().catch(() => {});
 }
 
 async function checkSite(name, site, {headless, out}) {
