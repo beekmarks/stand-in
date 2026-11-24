@@ -177,6 +177,7 @@ Install Node.js 22+, run `npm install`, then:
   ids that change on every visit, links saved with where they go, no needed click made optional), and the
   plan replays to the same page. The report, in `.runs/site-sweep-<time>/report.md`, groups problems by kind with a
   screenshot of each site. Choose kinds of site or single sites (`npm run site-sweep -- news github.com`),
+  run a second set of 100 sites with `--extended` (listed in `scripts/sweep-sites-extended.json`),
   or re-check the plans an earlier sweep saved without visiting anything
   (`npm run site-sweep -- --check-plans .runs/site-sweep-<time>`).
   It takes one to two minutes a site; sites that block automated browsers are listed separately.

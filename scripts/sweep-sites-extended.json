@@ -1,0 +1,20 @@
+{
+  "note": "A second set of popular public websites for npm run site-sweep -- --extended, chosen to add more of what found problems in the first set: big menus, heavy cookie notices, finance, single-page apps, and sites outside the US. Same rules: only pages anyone can open without signing in; the sweep never signs in, buys or submits forms other than a search.",
+  "sites": {
+    "finance": ["etrade.com", "merrilledge.com", "capitalone.com", "citi.com", "usbank.com", "discover.com", "sofi.com", "morganstanley.com", "tdbank.com", "geico.com", "progressive.com", "statefarm.com"],
+    "telecom": ["verizon.com", "att.com", "t-mobile.com", "xfinity.com"],
+    "retail": ["macys.com", "nordstrom.com", "sephora.com", "ulta.com", "gap.com", "chewy.com", "kroger.com", "cvs.com", "walgreens.com", "rei.com", "zappos.com"],
+    "food": ["allrecipes.com", "doordash.com", "starbucks.com", "mcdonalds.com", "instacart.com"],
+    "cars": ["tesla.com", "ford.com", "toyota.com", "carmax.com", "autotrader.com"],
+    "travel": ["southwest.com", "aa.com", "hilton.com", "hertz.com", "priceline.com"],
+    "magazines": ["cnbc.com", "latimes.com", "politico.com", "axios.com", "theatlantic.com", "time.com", "theverge.com", "wired.com", "techcrunch.com", "arstechnica.com", "bloomberg.com", "wsj.com"],
+    "sports": ["nfl.com", "nba.com", "mlb.com"],
+    "health": ["mayoclinic.org", "webmd.com", "clevelandclinic.org"],
+    "public-services": ["usps.com", "state.gov", "medicare.gov", "va.gov", "census.gov", "nps.gov", "loc.gov"],
+    "learning": ["stanford.edu", "edx.org", "duolingo.com", "quizlet.com", "wikihow.com"],
+    "developer": ["developer.android.com", "kubernetes.io", "docker.com", "npmjs.com", "pypi.org", "typescriptlang.org", "vercel.com", "code.visualstudio.com"],
+    "business": ["asana.com", "monday.com", "airtable.com", "zendesk.com", "squarespace.com", "wix.com", "godaddy.com", "docusign.com"],
+    "reference": ["merriam-webster.com", "goodreads.com", "vimeo.com", "rottentomatoes.com"],
+    "international": ["spiegel.de", "lemonde.fr", "elpais.com", "corriere.it", "yahoo.co.jp", "naver.com", "rakuten.co.jp", "mercadolibre.com.mx"]
+  }
+}

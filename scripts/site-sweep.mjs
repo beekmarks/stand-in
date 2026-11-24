@@ -9,6 +9,7 @@
 //   npm run site-sweep                          every site in scripts/sweep-sites.json
 //   npm run site-sweep -- news shopping         only these kinds of site
 //   npm run site-sweep -- github.com bbc.com    only these sites
+//   npm run site-sweep -- --extended            a second set of 100 sites (scripts/sweep-sites-extended.json)
 //   npm run site-sweep -- --jobs 2 --headless   two at a time; without a display
 //
 // After each site it checks that:
@@ -83,7 +84,8 @@ async function doubleShift(page) {
 }
 
 const BLOCKED = /access denied|just a moment|attention required|verify (that )?you are (a )?human|are you a robot|robot or human|captcha|pardon our interruption|request (was )?blocked|unusual traffic|403 forbidden|bot detected|security check|quick verification|press (&|and) hold|not a bot|confirm you'?re (a )?human|having a technical issue/i;
-const CONSENT = /^\s*(reject all|reject|decline( all)?|necessary (cookies )?only|only (allow )?(essential|necessary)( cookies)?|accept( all)?( cookies)?|allow( all)?( cookies)?|agree( and (proceed|continue))?|i agree|i accept|got it|ok(ay)?|continue)\s*$/i;
+// Cookie buttons, in English and the languages of the extended set's sites outside the US.
+const CONSENT = /^\s*(reject all|reject|decline( all)?|necessary (cookies )?only|only (allow )?(essential|necessary)( cookies)?|accept( all)?( cookies)?|allow( all)?( cookies)?|agree( and (proceed|continue))?|i agree|i accept|got it|ok(ay)?|continue|alle ablehnen|ablehnen|alle akzeptieren|akzeptieren|zustimmen|einverstanden|tout refuser|refuser|tout accepter|accepter|j'accepte|continuer sans accepter|rechazar( todo| todas)?|aceptar( todo| todas| y cerrar)?|rifiuta( tutto| tutti)?|accetta( tutto| tutti)?|accetto|rejeitar( todos)?|aceitar( todos| tudo)?|alles accepteren|weigeren|(すべて)?同意(する)?|すべて許可|拒否(する)?|(모두 )?동의|거부|확인)\s*$/i;
 
 // The generic visitor. Each step finds something suitable on the page, moves the mouse there like a person
 // and clicks; `did` records what it did, so the plan can be checked against it.
@@ -170,10 +172,10 @@ function visitor(page, did) {
       return pick ? mark(pick) : [];
     }
     if (kind === 'search') {
-      const box = [...document.querySelectorAll('input[type=search], input[name=q], textarea[name=q], input[name=query], input[name*=search i], input[id*=search i], input[placeholder*=search i], input[aria-label*=search i], [role=searchbox], [role=combobox][aria-label*=search i]')]
+      const box = [...document.querySelectorAll('input[type=search], input[name=q], textarea[name=q], input[name=query], input[name*=search i], input[id*=search i], input[placeholder*=search i], input[aria-label*=search i], [role=searchbox], [role=combobox][aria-label*=search i], input[placeholder*=such i], input[placeholder*=recherch i], input[placeholder*=busca i], input[placeholder*=cerca i], input[placeholder*=検索], input[placeholder*=검색], input[aria-label*=such i], input[aria-label*=recherch i], input[aria-label*=busca i], input[aria-label*=cerca i], input[aria-label*=検索], input[aria-label*=검색]')]
         .find(el => !el.disabled && !el.readOnly && anywhere(el));
       if (box) return mark(box, {box: true});
-      const opener = [...document.querySelectorAll('button, a, [role=button]')].find(el => shown(el) && /^search$|^open search|^show search/i.test(text(el)) );
+      const opener = [...document.querySelectorAll('button, a, [role=button]')].find(el => shown(el) && /^(search|suche|suchen|rechercher|recherche|buscar|cerca|検索|검색)$|^open search|^show search/i.test(text(el)) );
       return opener ? [{...centre(opener), box: false}] : [];
     }
     if (kind === 'newtab') {
@@ -196,6 +198,12 @@ function visitor(page, did) {
           const box = await b.boundingBox().catch(() => null);
           if (!box) continue;
           const name = (await b.innerText().catch(() => '')).trim();
+          // "Continue" or "OK" alone could be any button (a sign-up form's): only near words about cookies.
+          if (/^(continue|ok(ay)?|확인)$/i.test(name) && !await b.evaluate(el => {
+            for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++)
+              if (/cookie|consent|クッキー|쿠키/i.test(n.innerText ?? '')) return true;
+            return false;
+          }).catch(() => false)) continue;
           await moveAndClick({x: box.x + box.width / 2, y: box.y + box.height / 2});
           await note('cookies', name, {frame: frame !== page.mainFrame()});
           await sleep(800);
@@ -213,6 +221,18 @@ function visitor(page, did) {
         await sleep(1000);
         let links = await find('revealed', before);
         let how = 'pointing';
+        if (links.length) {
+          // Make sure pointing is what showed them: they should go when the pointer leaves (a carousel moving
+          // into view doesn't). Then point again.
+          const {width, height} = page.viewportSize() ?? {width: 1280, height: 800};
+          await page.mouse.move(width - 15, height - 15, {steps: 6});
+          await sleep(900);
+          const away = await find('revealed', before);
+          if (away.length >= links.length) continue;
+          await page.mouse.move(item.x, item.y, {steps: 8});
+          await sleep(1000);
+          links = await find('revealed', before);
+        }
         if (!links.length && item.opens) {
           await page.mouse.click(item.x, item.y);
           await sleep(900);
@@ -292,11 +312,14 @@ function visitor(page, did) {
 function expectedSteps(did) {
   const want = [];
   for (const d of did) {
-    if (['cookies', 'search-open', 'search-missed', 'menu-toggle'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`});
-    if (['link', 'newtab'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`, link: !!d.navigated});
-    if (d.kind === 'menu') {
+    if (['cookies', 'menu-toggle'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`, name: d.what});
+    if (['search-open', 'search-missed'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`});
+    if (['link', 'newtab'].includes(d.kind)) want.push({action: 'click', why: `${d.kind}: ${d.what}`, link: !!d.navigated, name: d.what});
+    // A menu item that went nowhere may not have been clicked at all (the menu closed first), and then the
+    // demo has nothing of it to record.
+    if (d.kind === 'menu' && d.navigated) {
       if (d.how === 'pointing') want.push({action: 'hover', why: `menu opened by pointing: ${d.what}`});
-      want.push({action: 'click', why: `menu: ${d.what}`, link: !!d.navigated});
+      want.push({action: 'click', why: `menu: ${d.what}`, link: !!d.navigated, name: d.what.split(' > ').at(-1)});
     }
     if (d.kind === 'search') want.push({action: 'type', why: 'search for "help"', text: 'help', search: true});
   }
@@ -308,7 +331,12 @@ function matchSteps(steps, did) {
   const missing = [], matched = [];
   let i = 0;
   for (const w of expectedSteps(did)) {
-    const at = steps.findIndex((s, j) => j >= i && s.action === w.action && (w.text == null || s.text === w.text));
+    const fits = (s, j) => j >= i && s.action === w.action && (w.text == null || s.text === w.text);
+    // A link the visitor clicked by name is that step, not a stray click on the way (on text, say).
+    // (Either name may be cut short, so the start is enough.)
+    const key = n => typeof n === 'string' ? n.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 20) : null;
+    const named = w.name ? steps.findIndex((s, j) => fits(s, j) && key(s.target?.name ?? s.target?.text) === key(w.name)) : -1;
+    const at = named >= 0 ? named : steps.findIndex(fits);
     if (at < 0) missing.push(w.why); else { matched.push({want: w, step: steps[at], at}); i = at + 1; }
   }
   return {missing, matched};
@@ -319,8 +347,10 @@ function matchSteps(steps, did) {
 const randomPart = p => p.length >= 4 && ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
   (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
 const generatedId = id => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r|«r|_r_)/i.test(id) ||
+  /^[A-Z][A-Za-z]+-(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])[A-Za-z0-9]{5,8}$/.test(id) ||
   id.split(/[-_:.]/).some(randomPart) || (/^[a-zA-Z]{5,8}$/.test(id) && (id.match(/[A-Z]/g) ?? []).length >= 2);
-const idsIn = text => [...(text ?? '').matchAll(/#((?:\\.|[\w-])+)|\[id=["']?([^"'\]]+)/g)].map(m => (m[1] ?? m[2]).replace(/\\/g, ''));
+// Ids and style (class) names in a CSS selector.
+const idsIn = text => [...(text ?? '').matchAll(/[#.]((?:\\.|[\w-])+)|\[id=["']?([^"'\]]+)/g)].map(m => (m[1] ?? m[2]).replace(/\\/g, ''));
 const describe = t => t?.name ?? t?.label ?? t?.placeholder ?? t?.testId ?? t?.css ?? JSON.stringify(t);
 
 // Things that make a plan fragile even when today's replay happens to work. Each one is a problem Stand-in
@@ -331,7 +361,7 @@ function planIssues(steps, did) {
   for (const s of steps) {
     const bad = [s.target, s.around].flatMap(t => t && typeof t === 'object' ? [...idsIn(t.css), ...idsIn(t.frame)] : typeof t === 'string' ? idsIn(t) : [])
       .filter(generatedId);
-    if (bad.length) issues.push(`uses an id that changes on every visit (${bad.join(', ')}) in a ${s.action} step`);
+    if (bad.length) issues.push(`uses a name the site makes up afresh on each visit (${bad.join(', ')}) in a ${s.action} step`);
   }
   for (const {want, step} of matched) {
     const t = step.target ?? {};
@@ -496,7 +526,9 @@ const headless = args.includes('--headless');
 const jobsAt = args.indexOf('--jobs');
 const jobs = jobsAt >= 0 ? Math.max(1, +args[jobsAt + 1] || 1) : 1;
 const chosen = args.filter((a, i) => !a.startsWith('--') && (jobsAt < 0 || i !== jobsAt + 1));
-const {sites} = JSON.parse(await readFile(join(root, 'scripts', 'sweep-sites.json'), 'utf8'));
+// --extended: the second set of 100 sites, in scripts/sweep-sites-extended.json.
+const listFile = args.includes('--extended') ? 'sweep-sites-extended.json' : 'sweep-sites.json';
+const {sites} = JSON.parse(await readFile(join(root, 'scripts', listFile), 'utf8'));
 const all = Object.entries(sites).flatMap(([kind, list]) => list.map(site => ({site, kind})));
 const queue = chosen.length ? all.filter(s => chosen.includes(s.kind) || chosen.includes(s.site)) : all;
 for (const c of chosen) if (!sites[c] && !all.some(s => s.site === c)) queue.push({site: c, kind: 'other'});

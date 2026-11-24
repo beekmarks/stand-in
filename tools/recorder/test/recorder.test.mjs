@@ -205,6 +205,31 @@ test('closing the tab while recording saves the video so far instead of losing i
   } finally { await ctx.close(); }
 });
 
+test('a tab that crashes while recording still saves the video and plan, without hanging', {timeout: 60000}, async () => {
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  const videoPath = join(dir, 'crashed.mp4'), planPath = join(dir, 'crashed.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 640, height: 480}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath, capture});
+    const busy = join(dir, 'busy-crash.html');
+    await writeFile(busy, '<button>Go</button><p id=t></p><script>setInterval(() => t.textContent = performance.now(), 30)</script>');
+    await page.goto(pathToFileURL(busy).href);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Go'}).click();
+    await page.waitForTimeout(4000);
+    page.goto('chrome://crash').catch(() => {});
+    const started = Date.now();
+    const result = await done;
+    assert.ok(Date.now() - started < 30000, `saving took ${(Date.now() - started) / 1000} s`);
+    assert.match(result.cutShort, /crashed/);
+    assert.ok((await readFile(videoPath)).length > 1000);
+    assert.ok(JSON.parse(await readFile(planPath, 'utf8')).steps.some(s => s.action === 'click'));
+  } finally { await ctx.close().catch(() => {}); }
+});
+
 test('closing the tab before recording starts saves nothing and says so', async () => {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -514,6 +539,32 @@ test('links in menus that open on hover or click are recorded and replayed', {sk
       assert.equal(result.code, 0, `${name}: ${result.output}`);
       assert.match(result.output, /opening the menu/);
     }
+  } finally { await run.close(); }
+});
+
+test('recording works on a page that removes every listener while loading', {skip: process.platform === 'win32', timeout: 90000}, async () => {
+  // document.open() removes all of the window's listeners, Stand-in's included; Stand-in puts them back.
+  const run = await liveCli('relisten', `<script>
+      addEventListener('load', () => setTimeout(() => {
+        document.open();
+        document.write('<button onclick="this.textContent = \\'Clicked\\'">Click me</button>');
+        document.close();
+      }, 300));
+    </script>`);
+  const {page, cwd} = run;
+  try {
+    await page.getByRole('button', {name: 'Click me'}).waitFor();
+    await page.waitForTimeout(1500);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Click me'}).click();
+    await page.waitForTimeout(800);
+    await doubleShift(page);
+    const [code] = await run.exited;
+    assert.equal(code, 0, run.output);
+    const [planName] = await readdir(join(cwd, 'demos'));
+    const plan = JSON.parse(await readFile(join(cwd, 'demos', planName), 'utf8'));
+    assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Click me'), JSON.stringify(plan.steps));
   } finally { await run.close(); }
 });
 
@@ -892,8 +943,13 @@ test('links are found by where they go when names repeat or change', {timeout: 6
   const pages = {
     '/': `<header><a href="/promo">Warnings</a></header>
       <main><a href="/warnings">Warnings</a> <a href="/dallas">Downtown Dallas Sunny 61°</a>
+      <a role="presentation" href="/shop">Start Shopping</a>
       <a href="/start?_ga=2.1.2.3">Get started</a> <a href="/start/now?utm_source=nav&amp;id=5&amp;_ga=9.8.7">Get started</a>
-      <p><a id="card-list-items_1-0" href="/index-funds">Investing in Index Funds: Key Benefits and Drawbacks for Long-Term Savers</a></p></main>`,
+      <p><a id="card-list-items_1-0" href="/index-funds">Investing in Index Funds: Key Benefits and Drawbacks for Long-Term Savers</a></p>
+      <p>Call <a href="tel:18006982411">800-698-2411</a></p>
+      <a href="/claims" style="display:block"><span aria-hidden="true" style="display:block">01</span><span style="display:block">Claims and appeals</span>
+        <span style="display:block">Check your claim, decision review, or appeal status and much more besides</span></a>
+      <a href="/ap/forgotpassword?openid.return_to=${'x'.repeat(400)}&amp;pageId=zappos">Password assistance</a></main>`,
   };
   const server = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html');
@@ -913,23 +969,38 @@ test('links are found by where they go when names repeat or change', {timeout: 6
     await page.goto(url);
     await doubleShift(page);
     await waitForLiveState(page, 'recording');
+    await page.getByRole('link', {name: 'Start Shopping'}).click();
+    await page.waitForURL(/shop/);
+    await page.goBack();
     await page.getByRole('link', {name: 'Get started'}).nth(1).click();
     await page.waitForURL(/start\/now/);
     await page.goBack();
     await page.getByRole('link', {name: /Index Funds/}).click();
     await page.waitForURL(/index-funds/);
     await page.goBack();
+    await page.getByRole('link', {name: /Claims and appeals/}).click();
+    await page.waitForURL(/claims/);
+    await page.goBack();
+    await page.getByRole('link', {name: 'Password assistance'}).click();
+    await page.waitForURL(/forgotpassword/);
+    await page.goBack();
     await page.locator('main').getByRole('link', {name: 'Warnings'}).click();
     await page.waitForURL(/warnings/);
     await page.waitForTimeout(300);
     await doubleShift(page);
     await done;
-    const [start, headline, click] = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    const [shop, start, headline, claims, forgot, click] = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    // role="presentation" on a link is ignored, as browsers do: it's still a link.
+    assert.deepEqual(shop.target, {role: 'link', name: 'Start Shopping', href: '/shop'}, JSON.stringify(shop));
     // Tracking codes are left out of the address; other parts of it stay.
     assert.equal(start.target.href, '/start/now?id=5', JSON.stringify(start));
     // A long headline is saved by its start and where it goes, not by its place in a list.
     assert.deepEqual(headline.target, {role: 'link', name: 'Investing in Index Funds: Key Benefits and Drawbacks for', href: '/index-funds'});
     assert.equal(click.target.href, '/warnings', JSON.stringify(click));
+    // A long name is saved by its first line that is part of the name, not a number hidden from screen readers.
+    assert.deepEqual(claims.target, {role: 'link', name: 'Claims and appeals', href: '/claims'}, JSON.stringify(claims));
+    // A very long address keeps just the page it goes to.
+    assert.equal(forgot.target.href, '/ap/forgotpassword', JSON.stringify(forgot));
 
     // Replay picks the "Warnings" link that goes to the same place, not the first one on the page.
     const {Actor} = await import('../record.mjs');
@@ -940,13 +1011,126 @@ test('links are found by where they go when names repeat or change', {timeout: 6
     await replayPage.waitForURL(/\/warnings$/);
     // A link whose address now carries different tracking codes is still the one picked.
     await replayPage.goto(url);
-    await replayPage.evaluate(() => { document.querySelectorAll('a')[4].setAttribute('href', '/start/now?utm_source=new&id=5&_ga=1.1'); });
+    await replayPage.evaluate(() => { document.querySelectorAll('a')[5].setAttribute('href', '/start/now?utm_source=new&id=5&_ga=1.1'); });
     await actor.run({action: 'click', target: {role: 'link', name: 'Get started', href: '/start/now?id=5'}}, 5000);
     await replayPage.waitForURL(/\/start\/now/);
+    // A link to just the site's address isn't confused with every other link on the site.
+    await replayPage.goto(url);
+    await replayPage.evaluate(href => { document.body.insertAdjacentHTML('beforeend', `<a href="${href}other">Other page</a>`); }, url);
+    await assert.rejects(actor.run({action: 'click', target: {role: 'link', name: 'Home page', href: url.replace(/\/$/, '')}}, 2500));
+    assert.equal(replayPage.url(), url);
     // And finds a link whose name has changed since, by where it goes.
     await replayPage.goto(url);
     await actor.run({action: 'click', target: {role: 'link', name: 'Downtown Dallas Cloudy 53°', href: '/dallas'}}, 4000);
     await replayPage.waitForURL(/\/dallas$/);
+    // A name that also matches something going elsewhere ("01" matches any number) still finds the link
+    // that goes to the recorded address.
+    await replayPage.goto(url);
+    await actor.run({action: 'click', target: {role: 'link', name: '01', href: '/claims'}}, 4000);
+    await replayPage.waitForURL(/\/claims$/);
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('a button the site redraws as it is pressed is still the one recorded', {timeout: 60000}, async () => {
+  // Like zappos.com's "Sign In": pressing replaces the button, so the browser reports the click on the page.
+  const html = `<div id="bar" style="padding:20px"><button id="signin">Sign In</button></div><div id="menu"></div>
+    <script>
+      document.addEventListener('mousedown', e => {
+        if (e.target.id !== 'signin') return;
+        document.querySelector('#bar').innerHTML = '<button id="signin">Sign In</button>';
+        document.querySelector('#menu').textContent = 'Menu open';
+      });
+    </script>`;
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(html); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'redrawn.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'redrawn.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Sign In'}).click();
+    await page.getByText('Menu open').waitFor();
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const [click] = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    assert.deepEqual(click.target, {role: 'button', name: 'Sign In'}, JSON.stringify(click));
+    assert.ok(!click.optional);
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('a link in a pop-up that goes to another page is a required step', {timeout: 60000}, async () => {
+  const pages = {
+    '/': `<div role="dialog" style="position:fixed;top:20px;left:20px;background:#eee;padding:20px">
+        <button onclick="this.textContent = 'Closed'">Close</button> <a href="/signin">Continue</a></div>`,
+    '/signin': '<h1>Sign in</h1>',
+  };
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(pages[new URL(req.url, 'http://x').pathname] ?? ''); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'popup-link.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'popup-link.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Close'}).click();
+    await page.getByRole('link', {name: 'Continue'}).click();
+    await page.waitForURL(/signin/);
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const [close, next] = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
+    assert.equal(close.optional, true, JSON.stringify(close));
+    assert.ok(!next.optional, JSON.stringify(next));
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('cookie buttons and search boxes are recognised in other languages', {timeout: 60000}, async () => {
+  const html = `<div><button onclick="this.parentNode.remove()">Alle akzeptieren</button></div>
+    <form onsubmit="event.preventDefault()"><input placeholder="Suchen"></form>`;
+  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(html); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'languages.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'languages.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('button', {name: 'Alle akzeptieren'}).click();
+    await page.getByPlaceholder('Suchen').click();
+    await page.keyboard.type('Hilfe', {delay: 30});
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(3000);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps;
+    const accept = steps.find(s => s.action === 'click');
+    // "Accept all" closes a cookie notice, which may not appear again on replay.
+    assert.equal(accept.optional, true, JSON.stringify(accept));
+    // A pause after a search is an ordinary wait, in German too.
+    assert.ok(!steps.some(s => s.action === 'waitForStable'), JSON.stringify(steps));
   } finally {
     await ctx.close();
     server.close();
@@ -998,6 +1182,7 @@ test('capture avoids generated ids and treats clicks in pop-up frames as optiona
   const pages = {
     '/': `<div id="_R_5l7d_" style="padding:30px;background:#eee;cursor:pointer" onclick="document.body.dataset.panel = 1">Panel</div>
       <p style="margin:20px">Just some text to read.</p>
+      <div class="TitleContent-bmXhJu"><h3 style="margin:20px">Database Leaks Expose 3.5 Billion Usernames, Passwords and Documents Online</h3></div>
       <iframe id="offer-0-WBVvC" src="/offer" style="position:fixed;bottom:0;left:0;width:320px;height:160px;border:0"></iframe>`,
     '/offer': '<div style="width:300px;height:140px;background:#c33" onclick="this.dataset.clicked = 1"></div>',
   };
@@ -1015,12 +1200,16 @@ test('capture avoids generated ids and treats clicks in pop-up frames as optiona
     await waitForLiveState(page, 'recording');
     await page.mouse.click(500, 30);
     await page.getByText('Just some text to read.').click();
+    await page.getByRole('heading', {name: /Database Leaks/}).click();
     await page.mouse.click(150, 620);
     await page.waitForTimeout(600);
     await doubleShift(page);
     await done;
     const clicks = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'click');
-    assert.equal(clicks.length, 3, JSON.stringify(clicks));
+    assert.equal(clicks.length, 4, JSON.stringify(clicks));
+    // A long headline is found by its first words, not a path with made-up style names.
+    const headline = clicks.splice(2, 1)[0];
+    assert.deepEqual(headline.target, {text: 'Database Leaks Expose 3.5 Billion Usernames, Passwords and'}, JSON.stringify(headline));
     // React's ids ("_R_5l7d_") and random tokens ("WBVvC") change on every visit, so they're not used.
     assert.doesNotMatch(JSON.stringify(clicks), /_R_5l7d_|WBVvC/);
     assert.ok(!clicks[0].optional);
@@ -1111,7 +1300,7 @@ test('a pop-up that is already gone on replay is skipped quickly', {timeout: 300
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   try {
-    await page.setContent('<button onclick="document.body.dataset.ok = 1">Continue</button>');
+    await page.setContent('<button onclick="document.body.dataset.ok = 1">Continue</button> <a href="https://example.com/free">Free Movies</a>');
     const {Actor} = await import('../record.mjs');
     const actor = new Actor(page, {viewport: {width: 800, height: 600}, pace: 'brisk'});
     const started = Date.now();
@@ -1119,7 +1308,48 @@ test('a pop-up that is already gone on replay is skipped quickly', {timeout: 300
     assert.ok(Date.now() - started < 5000);
     await actor.run({action: 'click', target: {role: 'button', name: 'Continue'}}, 3000);
     assert.equal(await page.evaluate(() => document.body.dataset.ok), '1');
+    // A click on some text that didn't matter when recorded isn't made if that text is now a link elsewhere.
+    await assert.rejects(actor.run({action: 'click', target: {text: 'Free Movies'}, optional: true, timeout: 3000}, 3000), /link to another page/);
+    assert.equal(page.url(), 'about:blank');
   } finally { await ctx.close(); }
+});
+
+test('replay clicks only whole-word names, and copes with menus that close and clicks a page ignores', {timeout: 60000}, async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    if (req.url === '/next') return res.end('<h1>Next page</h1>');
+    res.end(`<style>#menu { display: none; position: absolute; top: 40px; left: 0 } li:hover #menu, #menu.open { display: block }</style>
+      <button onclick="document.body.dataset.settings = 1" style="position:fixed; right:10px; bottom:10px">Cookies Settings</button>
+      <ul style="list-style:none"><li style="height:30px"><a href="/news">News</a>
+        <div id="menu"><a href="/next" style="display:block; padding:10px">Today's "probable" pitchers</a></div></li></ul>
+      <script>
+        // The menu closes by itself the first time (the page redrawing as it loads), and the first click on
+        // its link does nothing (the page not ready for it yet).
+        let closedOnce = false, ignoredOnce = false;
+        const menu = document.getElementById('menu');
+        document.querySelector('li').addEventListener('mouseenter', () => {
+          if (closedOnce) return;
+          closedOnce = true;
+          setTimeout(() => { menu.style.display = 'none'; setTimeout(() => menu.style.display = '', 1500); }, 400);
+        });
+        menu.querySelector('a').addEventListener('click', e => { if (!ignoredOnce) { ignoredOnce = true; e.preventDefault(); } });
+      </script>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    const {Actor} = await import('../record.mjs');
+    const actor = new Actor(page, {viewport: {width: 800, height: 600}, pace: 'brisk'});
+    // A cookie banner's "OK" that isn't there must not find "Cookies Settings".
+    await assert.rejects(actor.run({action: 'click', target: {role: 'button', name: 'OK'}}, 2000), /Timeout/);
+    assert.equal(await page.evaluate(() => document.body.dataset.settings), undefined);
+    await actor.run({action: 'hover', target: {role: 'link', name: 'News', href: '/news'}}, 3000);
+    // (A name with quotes in it, too.)
+    await actor.run({action: 'click', target: {role: 'link', name: 'Today\'s "probable" pitchers', href: '/next'}}, 10000);
+    await page.waitForURL('**/next', {timeout: 5000});
+  } finally { await ctx.close(); await new Promise(resolve => server.close(resolve)); }
 });
 
 test('a failed replay explains the step in plain words and keeps the video so far', {timeout: 90000}, async () => {

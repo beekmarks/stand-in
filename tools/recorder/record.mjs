@@ -253,6 +253,8 @@ function overlayInit(opts) {
 }
 
 function captureInit() {
+  const addEventListener = (type, handler, options) =>
+    (window.__standInOn ?? EventTarget.prototype.addEventListener.bind(window))(type, handler, options);
   if (window.__demoCaptureInstalled) return;
   window.__demoCaptureInstalled = true;
   const send = ev => window.__demoCaptureEvent?.({...ev, t: Date.now()})
@@ -261,9 +263,17 @@ function captureInit() {
     '[role=menuitemcheckbox],[role=checkbox],[role=radio],[role=switch],[role=option],[role=combobox],[role=textbox],' +
     '[role=searchbox],[contenteditable=""],[contenteditable=true]';
   const clean = s => (s ?? '').replace(/\s+/g, ' ').trim();
-  const roleOf = el => el.getAttribute('role') ?? ({A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox',
-    SUMMARY: 'button'}[el.tagName] ?? (el.tagName === 'INPUT' ? ({checkbox: 'checkbox', radio: 'radio', submit: 'button',
-    button: 'button', search: 'searchbox', range: 'slider'}[el.type] ?? 'textbox') : null));
+  // As browsers work it out: the first role listed, except that "presentation" or "none" on something you
+  // can click or tab to is ignored (a link marked role="presentation" is still a link to Playwright too).
+  const nativeRole = el => (el.tagName === 'A' ? (el.hasAttribute('href') ? 'link' : null)
+    : {BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox', SUMMARY: 'button'}[el.tagName]) ??
+    (el.tagName === 'INPUT' ? ({checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button', search: 'searchbox',
+      range: 'slider'}[el.type] ?? 'textbox') : null);
+  const roleOf = el => {
+    const given = el.getAttribute('role')?.trim().split(/\s+/)[0];
+    if (given && !(/^(presentation|none)$/i.test(given) && (nativeRole(el) || el.hasAttribute('tabindex')))) return given;
+    return nativeRole(el);
+  };
   // Text as screen readers (and Playwright) read it: parts hidden from them with aria-hidden are left out,
   // such as GitHub's "Issues 5k+ (5k+)", whose name is "Issues (5k+)".
   const spokenText = el => {
@@ -308,7 +318,9 @@ function captureInit() {
   // React's ids (":r1:", "«r1»", "_R_5l7d_") and random tokens ("WBVvC") change on every visit.
   const randomPart = p => p.length >= 4 && ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
     (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p)));
+  // ...and style names made by tools like styled-components: "TitleContent-bmXhJu".
   const generated = s => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r|«r|_r_)/i.test(s) ||
+    /^[A-Z][A-Za-z]+-(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])[A-Za-z0-9]{5,8}$/.test(s) ||
     s.split(/[-_:.]/).some(randomPart) ||
     (/^[a-zA-Z]{5,8}$/.test(s) && (s.match(/[A-Z]/g) ?? []).length >= 2);
   // Events from inside web components (shadow DOM) are retargeted to the component; use the real element.
@@ -365,7 +377,9 @@ function captureInit() {
     const t = targetOf(raw);
     const link = closestAcross(raw, 'a[href]');
     const written = link?.getAttribute('href');
-    const href = written && untracked(written);
+    let href = written && untracked(written);
+    // A very long address (a sign-in page's, full of one-time codes): the page it goes to is enough.
+    if (href && href.length > 300) href = href.split(/[?#]/)[0];
     if (t && link && href && href.length <= 300 && !/^(#|javascript:)/i.test(href) && !t.css && !t.testId) return {...t, href};
     return t;
   };
@@ -391,8 +405,9 @@ function captureInit() {
     }
     const role = roleOf(el), name = el.matches?.(INTERACTIVE) ? nameOf(el) : '';
     if (role && name && name.length <= 60) return withIndex({role, name}, el, role, name);
-    // A long name (a search result with a description) still starts with something recognisable.
-    const first = clean((el.innerText ?? '').split('\n').find(l => l.trim()));
+    // A long name (a search result with a description) still starts with something recognisable: its first
+    // line that is part of the name (not a number marked hidden from screen readers, say).
+    const first = clean((el.innerText ?? '').split('\n').find(l => clean(l) && (!name || name.includes(clean(l)))));
     if (role && first && first.length <= 100 && first !== name) return {role, name: first};
     if (el.tagName === 'IMG' && clean(el.alt)) return {role: 'img', name: clean(el.alt)};
     // A long name on one line (a headline or product name): its start, cut at a word, still finds it, since
@@ -410,13 +425,17 @@ function captureInit() {
     if (tid) return {testId: tid, nth: allIn(document, `[data-testid="${CSS.escape(tid)}"]`).indexOf(el)};
     const txt = clean(el.innerText);
     if (txt && txt.length <= 50) return {text: txt};
+    // Longer text (a headline): its first words, which still find it.
+    const opening = clean((el.innerText ?? '').split('\n').find(l => l.trim())).slice(0, 60).replace(/\s+\S*$/, '');
+    if (opening.length >= 20) return {text: opening};
     return {css: cssPath(el)};
   };
   // A click that closes a banner, a cookie notice or a pop-up. These often don't appear again on replay
   // (the site remembers), so their steps become optional.
   // The whole name is one of these ("Accept all cookies", "No thanks", "×"), or it's short and says close or dismiss.
-  const DISMISS_NAME = /^(?:x|×|✕|✖|close|dismiss|minimi[sz]e|hide|no,? thanks?|not now|maybe later|skip|got it|ok(?:ay)?|accept(?: all)?(?: cookies)?|i? ?agree|allow(?: all)?(?: cookies)?|reject(?: all)?(?: cookies)?|decline|continue without accepting)[.!]?$/i;
-  const DISMISS = {test: s => DISMISS_NAME.test(s) || (s.length <= 30 && /\b(?:close|dismiss)\b/i.test(s))};
+  // Also the usual words in German, French, Spanish, Italian, Portuguese, Dutch, Japanese and Korean.
+  const DISMISS_NAME = /^(?:x|×|✕|✖|close|dismiss|minimi[sz]e|hide|no,? thanks?|not now|maybe later|skip|got it|ok(?:ay)?|accept(?: all)?(?: cookies)?|i? ?agree|allow(?: all)?(?: cookies)?|reject(?: all)?(?: cookies)?|decline|continue without accepting|schlie(?:ß|ss)en|(?:alle )?akzeptieren|zustimmen|(?:alle )?ablehnen|einverstanden|nein,? danke|später|fermer|(?:tout )?accepter|j'accepte|(?:tout )?refuser|continuer sans accepter|non,? merci|plus tard|cerrar|aceptar(?: todo| todas| y cerrar)?|rechazar(?: todo| todas)?|de acuerdo|no,? gracias|más tarde|chiudi|accetta(?: tutto| tutti)?|rifiuta(?: tutto| tutti)?|accetto|no,? grazie|fechar|aceitar(?: todos| tudo)?|rejeitar(?: todos)?|concordo|sluiten|(?:alles )?accepteren|weigeren|akkoord|閉じる|(?:すべて)?同意(?:する)?|すべて許可|拒否(?:する)?|닫기|(?:모두 )?동의|거부|확인)[.!]?$/i;
+  const DISMISS = {test: s => DISMISS_NAME.test(s) || (s.length <= 30 && /\b(?:close|dismiss|schlie(?:ß|ss)en|fermer|cerrar|chiudi|fechar|sluiten)\b|閉じる|닫기/i.test(s))};
   const POPUP = /cookie|consent|gdpr|banner|modal|popup|pop-up|overlay|lightbox|backdrop|interstitial|survey|toast|newsletter|promo|offer|onetrust|didomi|cmp\b/i;
   // A pop-up is a dialog, or something that floats over the page (fixed or sticky) and is named like one.
   // The page itself doesn't count, even when <body> has a class such as "overlay-banner-open".
@@ -436,6 +455,11 @@ function captureInit() {
   const isDismiss = (el, name) => {
     if (DISMISS.test(clean(name)) || DISMISS.test(clean(el.getAttribute?.('title')))) return true;
     if (!inPopup(el)) return false;
+    // A link in a pop-up that goes to another page is a step of the demo (a sign-in menu's "Continue"), not
+    // a way to close the pop-up.
+    const link = el.closest?.('a[href]');
+    const href = link?.getAttribute('href') ?? '';
+    if (link && href && !/^(#|javascript:)/i.test(href) && link.href.split('#')[0] !== location.href.split('#')[0]) return false;
     // A short button or link in a pop-up, or a click on the pop-up's backdrop, closes it.
     return (/^(?:button|link)$/.test(roleOf(el) ?? '') && clean(name).length <= 30) || !el.matches(INTERACTIVE);
   };
@@ -527,16 +551,43 @@ function captureInit() {
     if (e.detail === 0 && lastKey?.key === 'Enter' && Date.now() - lastKey.t < 1000) return;
     const t = real(e);
     if (t.tagName === 'SELECT' || t.tagName === 'OPTION') return;
-    const el = closestAcross(t, INTERACTIVE) ?? t;
-    const menu = openedBy(el);
+    // A site that redraws a button the moment it's pressed makes the browser report the click on something
+    // around it (often the whole page). Then what was pressed is what was clicked.
+    const p = pressed && Date.now() - pressed.at < 2000 ? pressed : null;
+    pressed = null;
+    const about = p && p.raw !== t && (!p.raw.isConnected || t.contains?.(p.raw)) ? p : describeClick(t);
     lastAction = Date.now();
     shown.t = 0;
-    if (menu) send({kind: 'hover', target: targetFor(menu)});
+    if (about.menu) send({kind: 'hover', target: about.menuTarget});
+    send({kind: 'click', target: about.target, button: e.button === 2 ? 'right' : undefined, dismiss: about.dismiss || undefined});
+  }, true);
+  // What a click on `t` means, worked out while `t` is still on the page.
+  function describeClick(t) {
+    const el = closestAcross(t, INTERACTIVE) ?? t;
+    const menu = openedBy(el);
     // A click on plain content (not a link, button or anything the site made clickable) is incidental, such
     // as clicking to focus the page; if that content isn't there on replay, carry on.
     const plain = !closestAcross(t, INTERACTIVE) && getComputedStyle(t).cursor !== 'pointer';
-    send({kind: 'click', target: targetFor(t), button: e.button === 2 ? 'right' : undefined,
-      dismiss: isDismiss(el, nameOf(el)) || plain || undefined});
+    return {raw: t, target: targetFor(t), menu, menuTarget: menu && targetFor(menu), dismiss: isDismiss(el, nameOf(el)) || plain};
+  }
+  let pressed = null;
+  addEventListener('pointerdown', e => {
+    if (!e.isTrusted || e.button !== 0) return;
+    try { pressed = {...describeClick(real(e)), at: Date.now(), x: e.clientX, y: e.clientY}; } catch { pressed = null; }
+  }, true);
+  // If what was pressed is gone by the time the button comes up, the browser fires no click at all, though
+  // the site acted on the press. Record the click from what was pressed.
+  addEventListener('pointerup', e => {
+    const p = pressed;
+    if (!e.isTrusted || !p || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 12) return;
+    setTimeout(() => {
+      if (pressed !== p || p.raw.isConnected) return;
+      pressed = null;
+      lastAction = Date.now();
+      shown.t = 0;
+      if (p.menu) send({kind: 'hover', target: p.menuTarget});
+      send({kind: 'click', target: p.target, dismiss: p.dismiss || undefined});
+    }, 80);
   }, true);
   addEventListener('input', e => {
     const el = real(e);
@@ -544,7 +595,8 @@ function captureInit() {
     const secret = el.type === 'password';
     // A search box: what you type there brings up results, not a chat answer next to the box.
     const words = `${el.type ?? ''} ${el.getAttribute('role') ?? ''} ${el.name ?? ''} ${el.id ?? ''} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder ?? ''}`;
-    const search = el.type === 'search' || el.closest('[role=search],form[role=search]') != null || /\bsearch|searchbox|\bq\b|query|\bfind\b/i.test(words);
+    const search = el.type === 'search' || el.closest('[role=search],form[role=search]') != null ||
+      /\bsearch|searchbox|\bq\b|query|\bfind\b|such|recherch|busca|\bcerca|pesquis|zoek|sök|検索|검색/i.test(words);
     send({kind: 'input', target: targetFor(el), value: secret ? '' : (el.isContentEditable ? el.innerText : el.value), secret, search: search || undefined});
   }, true);
   addEventListener('change', e => {
@@ -736,10 +788,14 @@ class Actor {
     if (within) base = this.locator(frame != null && typeof within === 'object' && within.frame == null ? {...within, frame} : within);
     // `nth` picks one of several elements with the same role and name, so match that name exactly.
     // Numbers in a name (article counts, prices, dates) change between visits, so any number matches.
-    const pattern = n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+').replace(/\d[\d.,]*/g, '\\d[\\d.,]*');
+    // (Quotes as codes: Playwright can't read a pattern with a quote in it.)
+    const pattern = n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+').replace(/\d[\d.,]*/g, '\\d[\\d.,]*')
+      .replace(/['"`]/g, c => `\\x${c.charCodeAt(0).toString(16)}`);
+    // Otherwise the name may be part of a longer one ("Sign in" in "Sign in to GitHub"), but only as whole
+    // words: a button "OK" must not find "Cookies Settings".
     const named = name == null ? {} : exact || typeof name !== 'string' ? {name, exact: !!exact}
       : nth != null ? {name: new RegExp(`^\\s*${pattern(name)}\\s*$`, 'i')}
-      : /\d/.test(name) ? {name: new RegExp(pattern(name), 'i')} : {name};
+      : {name: new RegExp(`(?<![\\p{L}\\p{N}])${pattern(name.trim())}(?![\\p{L}\\p{N}])`, 'iu')};
     let loc = role ? base.getByRole(role, hidden ? {...named, includeHidden: true} : named)
       : text != null ? base.getByText(text, {exact: !!exact})
       : label != null ? base.getByLabel(label, {exact: !!exact})
@@ -752,6 +808,18 @@ class Actor {
 
   // Resolve to one visible element, bring it into view smoothly, return its box.
   async acquire(target, timeout) {
+    // What was found can vanish before it's reached: a menu that closes as the page finishes loading,
+    // say. Then look again (reopening the menu) rather than aim at nothing.
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = await this.acquireOnce(target, timeout);
+      if (found.box.width > 0 && found.box.height > 0) return found;
+      timeout = until - Date.now();
+      if (timeout < 1000) throw new Error('Element has no box (hidden or detached)');
+    }
+  }
+
+  async acquireOnce(target, timeout) {
     let loc = this.locator(target);
     // A name with a count or note after the words ("Issues 5k+ (5k+)", "Inbox (3)") may be read differently
     // on another visit; the words before it ("Issues") also find the element, though a full match is preferred.
@@ -759,16 +827,22 @@ class Actor {
       ? /^([^\d(\[]*[^\d(\[\s])\s*[\d(\[]/.exec(target.name)?.[1] : null;
     const full = loc;
     if (words && words.length >= 3) {
-      const escaped = words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/['"`]/g, c => `\\x${c.charCodeAt(0).toString(16)}`);
       loc = full.or(this.locator({...target, name: new RegExp(`^\\s*${escaped}\\b`, 'i')}));
     }
     // Wait for any visible match, not just the first: pages often have a hidden copy too (a mobile menu).
     const visible = l => target?.nth != null ? l.first() : l.filter({visible: true}).first();
     // A link is also found by where it goes, in case its name has changed.
     // (By the start of the address up to any "?", since links may carry tracking codes that change.)
-    const base = typeof target === 'object' && target.href ? target.href.split('?')[0] : '';
+    // A prefix only when there's a path to go on: "https://www.hertz.com" or "/" would match every link.
+    const base = typeof target === 'object' && target.href ? target.href.split(/[?#]/)[0] : '';
+    const path = base.replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]*/i, '');
+    // (A site's own address is written with or without the "/" at the end.)
+    const q = JSON.stringify, site = base.replace(/\/$/, '');
     const byHref = typeof target === 'object' && target.href && target.role
-      ? this.locator({css: base.length > 1 ? `a[href^=${JSON.stringify(base)}]` : `a[href=${JSON.stringify(target.href)}]`, frame: target.frame}) : null;
+      ? this.locator({css: path.length > 1 ? `a[href^=${q(base)}]`
+        : path === base ? `a[href=${q(target.href)}]` : `a[href=${q(target.href)}],a[href=${q(site)}],a[href=${q(site + '/')}]`,
+        frame: target.frame}) : null;
     // Some sites leave an open menu marked hidden from screen readers (aria-hidden), which hides it from a
     // search by role and name even though it's on screen.
     const marked = typeof target === 'object' && target.role && target.nth == null ? this.locator(target, {hidden: true}) : null;
@@ -788,7 +862,8 @@ class Actor {
       } else if (marked) loc = marked;
     }
     const count = await loc.count();
-    if (count > 1 && target?.nth == null) {
+    if (count > 1 || (count === 1 && byHref && path.length > 1)) {
+      if (target?.nth != null) { loc = loc.first(); return this.reach(loc); }
       // Several matches: the visible one that goes to the recorded address, else the first visible one.
       let first = null, same = null;
       for (let i = 0; i < count && !same; i++) {
@@ -811,8 +886,15 @@ class Actor {
           return a.full === b.full || a.page === b.page;
         }, target.href).catch(() => false)) same = m;
       }
+      // None goes there, but a link that does is on the page: that's the one. (The name may match
+      // something else: "01" matches any number, a phone number say.)
+      if (!same && first && byHref && path.length > 1 && await visible(byHref).isVisible().catch(() => false)) same = visible(byHref);
       loc = same ?? first ?? loc.first();
     } else loc = loc.first();
+    return this.reach(loc);
+  }
+
+  async reach(loc) {
     await this.bringIntoView(loc);
     const box = await this.trueBox(loc);
     if (!box) throw new Error('Element has no box (hidden or detached)');
@@ -891,7 +973,10 @@ class Actor {
     if (!box) return false;
     const name = await opener.evaluate(n => (n.getAttribute('aria-label') || n.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60)).catch(() => '');
     log(`   opening the menu${name ? ` “${name}”` : ''} first`);
-    // Point at it: most menus open on hover.
+    // Point at it: most menus open on hover. If the pointer is on it already (an earlier step pointed at it
+    // before the page was ready, say), moving onto it again is what opens the menu, so step off it first.
+    const on = ({x, y}) => x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+    if (on(this.mouse)) await this.glide(box.x + box.width / 2, Math.max(1, box.y - 16));
     await this.glide(box.x + box.width / 2, box.y + box.height / 2);
     await this.wait(700);
     if (await this.locator(target, {hidden: true}).filter({visible: true}).first().isVisible().catch(() => false)) return true;
@@ -989,24 +1074,89 @@ class Actor {
     return [box.x + box.width * fx, box.y + box.height * fy];
   }
 
+  // Move to the target, then make sure it's still what's under the pointer before pressing: a menu that's
+  // still sliding open moves its links, and something can come to cover them. If not, find it again.
+  // Move onto the target; false if it went away meanwhile (a menu that closed, say).
+  async aimAt(loc, box, at) {
+    let [x, y] = this.point(box, at);
+    await this.glide(x, y);
+    for (let tries = 0; ; tries++) {
+      await this.wait(110);
+      if (!await loc.isVisible().catch(() => false)) return false;
+      if (tries === 3 || await this.isUnder(loc, x, y) !== false) return true;
+      await sleep(250);
+      const again = await this.trueBox(loc).catch(() => null);
+      if (!again) return false;
+      [x, y] = this.point(again, at);
+      await this.glide(x, y);
+    }
+  }
+
+  // Is the target what's at this point of the page? null when that can't be told (inside a frame).
+  isUnder(loc, x, y) {
+    return loc.evaluate((el, [x, y]) => {
+      if (el.ownerDocument !== document) return null;
+      const root = el.getRootNode();
+      const hit = (root.elementFromPoint ? root : document).elementFromPoint(x, y);
+      return !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+    }, [x, y]).catch(() => null);
+  }
+
   async click(step, timeout) {
-    const {box} = await this.acquire(step.target, timeout);
-    await this.glide(...this.point(box, step.at));
-    await this.wait(110);
+    const until = Date.now() + timeout;
+    let loc, box;
+    // If it goes away on the way there, find it again rather than click whatever is left in its place.
+    for (let tries = 0; ; tries++) {
+      ({loc, box} = await this.acquire(step.target, Math.max(1000, until - Date.now())));
+      // A click that didn't matter when recorded (on some text, or closing a pop-up) mustn't take the demo
+      // to another page if what it finds now is a link: "Free Movies" was text then, a link now.
+      if (step.optional && typeof step.target === 'object' && !step.target.href && await loc.evaluate(el => {
+        const a = el.closest('a[href]');
+        if (!a || /^(#|javascript:)/i.test(a.getAttribute('href'))) return false;
+        return a.origin + a.pathname !== location.origin + location.pathname;
+      }).catch(() => false)) throw new Error('What it finds now is a link to another page, so it was left alone');
+      if (await this.aimAt(loc, box, step.at) || tries === 2) break;
+    }
     const opts = {button: step.button ?? 'left'};
-    for (let n = 1; n <= (step.double ? 2 : 1); n++) {
-      await this.page.mouse.down({...opts, clickCount: n});
-      await sleep(70);
-      await this.page.mouse.up({...opts, clickCount: n});
-      if (step.double && n === 1) await sleep(90);
+    const press = async () => {
+      for (let n = 1; n <= (step.double ? 2 : 1); n++) {
+        await this.page.mouse.down({...opts, clickCount: n});
+        await sleep(70);
+        await this.page.mouse.up({...opts, clickCount: n});
+        if (step.double && n === 1) await sleep(90);
+      }
+    };
+    const was = this.page.url(), began = Date.now();
+    await press();
+    // A link to another page that a page still loading ignores (its scripts not ready to handle the
+    // click): if nothing happens, click it again once.
+    const href = step.target?.href;
+    if (!href || step.double || step.button) return;
+    let other = false;
+    try { const u = new URL(href, was), w = new URL(was); other = u.origin + u.pathname !== w.origin + w.pathname; } catch {}
+    if (!other) return;
+    const moved = () => this.navStarted >= began || this.page.url() !== was;
+    for (let retry = 1; ; retry++) {
+    let since = Date.now();
+    while (Date.now() - since < 2500 && !moved()) await sleep(100);
+    if (moved() || retry > 2) return;
+    // Unless the click opened something in its place (a sign-in box, say).
+    const opened = await this.page.evaluate(() => [...document.querySelectorAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]')]
+      .some(d => d.getBoundingClientRect().width > 0 && getComputedStyle(d).visibility !== 'hidden')).catch(() => true);
+    if (opened) return;
+    // Find it again: the menu it was in may have closed.
+    let found;
+    try { found = await this.acquire(step.target, 5000); } catch { return; }
+    if (moved() || !await this.aimAt(found.loc, found.box, step.at)) return;
+    log('   the page ignored the click; clicking again');
+    await press();
     }
   }
 
   async type(step, timeout) {
     if (step.target) {
-      const {box} = await this.acquire(step.target, timeout);
-      await this.glide(...this.point(box, [0.3, 0.5]));
-      await this.wait(90);
+      const {loc, box} = await this.acquire(step.target, timeout);
+      await this.aimAt(loc, box, [0.3, 0.5]);
       await this.page.mouse.down(); await sleep(60); await this.page.mouse.up();
       await this.wait(160);
     }
@@ -1414,6 +1564,7 @@ function freeName(base, ...files) {
 // Re-encode to H.264 with Chrome's own WebCodecs encoder (hardware where available) and the mediabunny
 // MP4 library, in a hidden Chrome. No ffmpeg needed. If it can't, the AV1 file is kept.
 // ------------------------------------------------------------------------------------------
+const STALL_MS = +(process.env.STAND_IN_CONVERT_STALL_MS ?? 60000);
 async function makePlayable({chromium, chromePath, file, trim = false}) {
   // Only this one browser build of mediabunny ships with the extension, so find the file directly.
   const bundle = createRequire(import.meta.url).resolve.paths('mediabunny')
@@ -1423,12 +1574,21 @@ async function makePlayable({chromium, chromePath, file, trim = false}) {
   const tty = process.stderr.isTTY;
   const temporary = file.replace(/\.mp4$/i, '') + '.converting.mp4';
   let browser, input, output, written = 0, lastShown = 0;
+  // If converting stops making progress (Chrome stuck, the computer overloaded), give up after a minute and
+  // keep the original video rather than leave the person waiting forever.
+  let movedAt = Date.now(), stalled = false;
   const progress = p => {
+    movedAt = Date.now();
     const pct = Math.floor(p * 100);
     if (tty) process.stderr.write(`\r[stand-in] Finishing the video… ${pct}%`);
     else if (!lastShown) { lastShown = 1; log('Finishing the video…'); }
   };
   interruption.converting = {file, temporary};
+  const watchdog = setInterval(() => {
+    if (!browser || stalled || Date.now() - movedAt < STALL_MS) return;
+    stalled = true;
+    browser?.close().catch(() => {});
+  }, 1000);
   try {
     input = await open(file, 'r');
     output = await open(temporary, 'w');
@@ -1450,6 +1610,7 @@ async function makePlayable({chromium, chromePath, file, trim = false}) {
         const data = request.postDataBuffer();
         await output.write(data, 0, data.length, +url.searchParams.get('at'));
         written += data.length;
+        movedAt = Date.now();
         return route.fulfill({body: 'ok'});
       }
       return route.fulfill({status: 404});
@@ -1565,8 +1726,9 @@ async function makePlayable({chromium, chromePath, file, trim = false}) {
     return {ok: true, duration: result.duration, removed: result.removed};
   } catch (error) {
     if (tty) process.stderr.write('\n');
-    return {ok: false, reason: explainError(error)};
+    return {ok: false, reason: stalled ? `converting it stopped making progress for ${STALL_MS / 1000} seconds` : explainError(error)};
   } finally {
+    clearInterval(watchdog);
     interruption.converting = null;
     await browser?.close().catch(() => {});
     await input?.close().catch(() => {});
@@ -1632,7 +1794,8 @@ async function recordToFile(page, {file, frameRate, maxWidth, maxHeight, audio})
     stop({abandon = false} = {}) {
       finished ??= (async () => {
         stopping = true;
-        await copying;
+        // A crashed tab may never answer a read already under way.
+        await Promise.race([copying, sleep(abandon ? 3000 : 20000)]);
         if (!abandon && !lost) {
           // Chrome usually finishes within a few seconds; a tab that stopped answering must not hang Stand-in.
           let giveUp, timedOut = false;
@@ -1657,7 +1820,7 @@ async function recordToFile(page, {file, frameRate, maxWidth, maxHeight, audio})
           // Let a read already under way finish before the file closes.
           if (timedOut) await Promise.race([finishing.catch(() => {}), sleep(2000)]);
         }
-        await session.detach().catch(() => {});
+        await Promise.race([session.detach().catch(() => {}), sleep(3000)]);
         closed = true;
         await out.close();
         const complete = !abandon && !lost;
@@ -1791,6 +1954,21 @@ async function confirmSignedInReplay(plan, planText, approved) {
   if (plan.profileDir) await approvePlan(plan.profileDir, planText).catch(() => {});
 }
 
+// Some pages remove every listener on the window partway through loading (by rewriting the page with
+// document.write, say), which would leave Stand-in deaf to Shift and to your clicks. Stand-in's own
+// listeners are kept in a list, added with the browser's original addEventListener (saved before the site's
+// scripts run, as some replace it), and re-added every second while you record.
+function listenersInit() {
+  if (window.__standInOn) return;
+  const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+  const kept = [];
+  const hidden = (name, value) => Object.defineProperty(window, name, {value, configurable: true});
+  hidden('__standInOn', (type, fn, options) => { kept.push([type, fn, options]); add.call(window, type, fn, options); });
+  hidden('__standInRelisten', () => {
+    for (const [type, fn, options] of kept) { remove.call(window, type, fn, options); add.call(window, type, fn, options); }
+    return kept.length;
+  });
+}
 // Some sites switch off JavaScript's eval (American Express replaces it with one that throws), which
 // Stand-in's own small scripts in the page need. Keep the real one for those, and give the site's code the
 // site's version, so the site's protection still applies to everything else.
@@ -1808,6 +1986,8 @@ function keepEvalInit() {
 // open in this one instead. Real pop-up windows (opened with a size, such as sign-in or payment windows)
 // are left alone, because the site needs them to stay separate.
 function oneTabInit() {
+  const addEventListener = (type, handler, options) =>
+    (window.__standInOn ?? EventTarget.prototype.addEventListener.bind(window))(type, handler, options);
   const elsewhere = target => {
     if (!target || /^_(self|parent|top)$/i.test(target)) return false;
     if (target.toLowerCase() === '_blank') return true;
@@ -1878,6 +2058,8 @@ function keepInOneTab(ctx, page, {active}) {
 }
 
 function liveShortcutInit() {
+  const addEventListener = (type, handler, options) =>
+    (window.__standInOn ?? EventTarget.prototype.addEventListener.bind(window))(type, handler, options);
   if (window.__standInLiveShortcut) return;
   window.__standInLiveShortcut = true;
   if (window === window.top) {
@@ -2039,6 +2221,12 @@ async function liveRecording({ctx, page, plan, videoPath, startRecording = recor
     return toggle();
   });
   await ctx.addInitScript(liveShortcutInit);
+  // Put back Stand-in's listeners if the page removed them (see listenersInit).
+  const relisten = setInterval(() => {
+    if (page.isClosed()) return;
+    for (const frame of page.frames()) frame.evaluate(() => window.__standInRelisten?.()).catch(() => {});
+  }, 1000);
+  done.finally(() => clearInterval(relisten)).catch(() => {});
   // Ctrl+C (or the terminal closing): save if recording, otherwise just stop.
   const interrupt = cutShort => {
     if (state === 'recording') return save({cutShort});
@@ -2089,7 +2277,10 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
     arm(url) { startUrl = url; armed = true; },
     disarm() { armed = false; },
     async finish() {
-      await queue;
+      // Actions still being worked out when the tab crashed may never finish: keep what's done.
+      let late = false;
+      await Promise.race([queue, sleep(5000).then(() => { late = true; })]);
+      if (late) error ??= new Error('the tab stopped answering');
       const steps = builder.finish(Date.now());
       const raw = {url: startUrl, viewport: plan.viewport, fps: plan.fps,
         profileDir: relative(dirname(planPath), profileDir).split('\\').join('/'), steps};
@@ -2284,6 +2475,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
         }
       }
     }
+    await ctx.addInitScript(listenersInit);
     await ctx.addInitScript(keepEvalInit);
     await ctx.addInitScript(overlayInit, plan.overlay);
     await ctx.addInitScript(oneTabInit);
@@ -2393,7 +2585,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
   if (failure) throw failure;
 }
 
-export {Actor, captureInit, keepEvalInit, keepInOneTab, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
+export {Actor, captureInit, keepEvalInit, keepInOneTab, listenersInit, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
   quickMain().catch(async error => {
