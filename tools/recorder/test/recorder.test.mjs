@@ -267,6 +267,25 @@ test('live shortcut works in focused iframes across navigation', async () => {
   } finally { await ctx.close(); }
 });
 
+test('the shortcut works in a frame the site writes itself, as bot checks do', async () => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const file = join(dir, 'live-written-frame.html');
+  try {
+    await writeFile(file, `<iframe id=b></iframe><script>
+      const d = document.getElementById('b').contentDocument; d.open(); d.write('<input id=j>'); d.close();</script>`);
+    const {done} = await liveRecording({ctx, page, videoPath: join(dir, 'written-frame.mp4'), startRecording: fakeRecorder,
+      plan: {fps: 30, viewport: {width: 640, height: 480}}});
+    await page.goto(pathToFileURL(file).href);
+    await page.frameLocator('#b').locator('input').click();
+    await page.waitForTimeout(700);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await doubleShift(page);
+    await done;
+  } finally { await ctx.close(); }
+});
+
 test('links, forms and scripts that open a new tab stay in the recorded tab', async () => {
   const servers = [];
   const ctx = await browser.newContext();
@@ -875,7 +894,8 @@ const TRICKY_PAGE = `<!doctype html><meta charset="utf-8"><body class="overlay-b
 <label>Period <select id="period"><option value="0">3pm Fri, Nov 20</option><option value="12">5pm Sat, Nov 21</option></select></label>
 <form onsubmit="event.preventDefault(); document.body.dataset.saved = 1"><input type="submit" value="Save"></form>
 <a href="#issues" onclick="document.body.dataset.issues = 1"><span aria-hidden="true">5k+</span> Issues <span>(5k+)</span></a>
-<iframe id="ad" srcdoc="<body style='margin:0;background:#fd0;height:100%'>Ad</body>" style="width:600px;height:200px;border:0"></iframe>
+<iframe id="ad" title="3rd party ad content" src="/ad" style="width:600px;height:200px;border:0"></iframe>
+<iframe title="3rd party ad content" srcdoc="Another ad" style="width:100px;height:50px;border:0"></iframe>
 <div style="height:3000px"></div>
 <script>
 customElements.define('fancy-button', class extends HTMLElement {
@@ -888,6 +908,94 @@ customElements.define('code-box', class extends HTMLElement {
     '<div class="editor"><div class="content" contenteditable="true" style="min-height:40px;border:1px solid #999"></div></div>'; }
 });
 </script>`;
+
+test('pointing that opens a menu kept above the page until then is recorded', {timeout: 60000}, async () => {
+  // As on Fidelity: the menu is always there, parked above the top of the page, and moves into place when
+  // the pointer arrives (on pointerenter, before mouseover).
+  const html = `<ul style="list-style:none;margin:0;padding:10px"><li id="item" style="position:relative">
+      <a href="#accounts" data-testid="AccountsTrade">Accounts &amp; Trade</a>
+      <div id="menu" style="position:absolute;top:-1000px;left:0;background:#eee;padding:10px">
+        <a href="/portfolio">Portfolio</a></div></li></ul>
+    <script>
+      const item = document.getElementById('item'), menu = document.getElementById('menu');
+      item.addEventListener('pointerenter', () => { menu.style.top = '100%'; });
+      item.addEventListener('pointerleave', () => { menu.style.top = '-1000px'; });
+    </script>`;
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/' ? html : '<h1>Portfolio</h1>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'parked-menu.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'parked-menu.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByText('Accounts & Trade').hover();
+    await page.waitForTimeout(400);
+    await page.getByRole('link', {name: 'Portfolio'}).click();
+    await page.waitForURL(/portfolio/);
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps.map(s => [s.action, s.target]), [['hover', {testId: 'AccountsTrade'}],
+      ['click', {role: 'link', name: 'Portfolio', href: '/portfolio'}]], JSON.stringify(steps));
+    // Replay opens the menu before clicking, even without the pointing step: a link parked off the page
+    // can't be clicked where it is.
+    const {Actor} = await import('../record.mjs');
+    for (const run of [steps, steps.slice(1)]) {
+      const replayPage = await ctx.newPage();
+      await replayPage.goto(`http://127.0.0.1:${server.address().port}/`);
+      const actor = new Actor(replayPage, {viewport: {width: 1000, height: 700}, pace: 'brisk'});
+      for (const step of run) await actor.run(step, 5000);
+      await replayPage.waitForURL(/portfolio/, {timeout: 3000});
+      await replayPage.close();
+    }
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+test('pointing that opens a big menu is recorded, past the items between it and the link', {timeout: 60000}, async () => {
+  // As on Atlassian: the menu is drawn elsewhere, hidden until "Products" is pointed at, and the way to its
+  // last link passes over many other items.
+  const links = Array.from({length: 12}, (_, i) => `<a href="/app${i}" style="display:block;padding:6px">App ${i}</a>`).join('');
+  const html = `<nav><a role="menuitem" href="#" id="products" style="display:inline-block;padding:10px">Products</a></nav>
+    <div id="menu" style="visibility:hidden;position:absolute;top:50px;left:0;width:300px;background:#eee">${links}
+      <a href="/software" style="display:block;padding:6px">See all apps</a></div>
+    <script>document.getElementById('products').addEventListener('pointerenter', () => { menu.style.visibility = 'visible'; });</script>`;
+  const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(req.url === '/' ? html : '<h1>Software</h1>'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});
+  const page = await ctx.newPage();
+  const planPath = join(dir, 'big-menu.json');
+  try {
+    const plan = {fps: 30, viewport: {width: 1000, height: 700}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'big-menu.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByRole('menuitem', {name: 'Products'}).hover();
+    await page.waitForTimeout(300);
+    for (let i = 0; i < 12; i++) { await page.getByRole('link', {name: `App ${i}`, exact: true}).hover(); await page.waitForTimeout(30); }
+    await page.getByRole('link', {name: 'See all apps'}).click();
+    await page.waitForURL(/software/);
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps.map(s => [s.action, s.target]), [['hover', {role: 'menuitem', name: 'Products'}],
+      ['click', {role: 'link', name: 'See all apps', href: '/software'}]], JSON.stringify(steps));
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
 
 test('pointing that reveals a menu drawn elsewhere on the page is recorded, typing suggestions are not', {timeout: 60000}, async () => {
   // "Locations" draws its menu at the end of the page when pointed at, with nothing linking the two; the
@@ -1225,7 +1333,10 @@ test('capture avoids generated ids and treats clicks in pop-up frames as optiona
 });
 
 test('capture copes with banners, repeated links, web components, frames and selects', {timeout: 60000}, async () => {
-  const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(TRICKY_PAGE); });
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(req.url === '/ad' ? `<html style="overflow:hidden"><body style="margin:0;background:#fd0;height:900px">Ad, taller than it shows</body></html>` : TRICKY_PAGE);
+  });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
   const ctx = await browser.newContext({viewport: {width: 1000, height: 700}});

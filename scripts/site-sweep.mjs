@@ -350,7 +350,8 @@ const generatedId = id => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|ng|ember)-|__|^(?::r
   /^[A-Z][A-Za-z]+-(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])[A-Za-z0-9]{5,8}$/.test(id) ||
   id.split(/[-_:.]/).some(randomPart) || (/^[a-zA-Z]{5,8}$/.test(id) && (id.match(/[A-Z]/g) ?? []).length >= 2);
 // Ids and style (class) names in a CSS selector.
-const idsIn = text => [...(text ?? '').matchAll(/[#.]((?:\\.|[\w-])+)|\[id=["']?([^"'\]]+)/g)].map(m => (m[1] ?? m[2]).replace(/\\/g, ''));
+// (A target inside nested frames has a list of frame selectors.)
+const idsIn = text => [].concat(text ?? []).filter(t => typeof t === 'string').flatMap(t => [...t.matchAll(/[#.]((?:\\.|[\w-])+)|\[id=["']?([^"'\]]+)/g)]).map(m => (m[1] ?? m[2]).replace(/\\/g, ''));
 const describe = t => t?.name ?? t?.label ?? t?.placeholder ?? t?.testId ?? t?.css ?? JSON.stringify(t);
 
 // Things that make a plan fragile even when today's replay happens to work. Each one is a problem Stand-in

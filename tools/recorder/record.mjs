@@ -494,9 +494,11 @@ function captureInit() {
     return [...controlled, ...(shared ? [shared] : [])];
   };
   const SHOWN_ITEMS = 'a[href],button,input,[role=menuitem],[role=link],[role=button]';
+  // Placed above or left of the page itself, where no scrolling reaches: how some sites hide a closed menu.
+  const parked = r => r.right + scrollX <= 0 || r.bottom + scrollY <= 0;
   const visibleIn = areas => areas.reduce((n, a) => n + [...a.querySelectorAll(SHOWN_ITEMS)].filter(x => {
     const r = x.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && getComputedStyle(x).visibility !== 'hidden';
+    return r.width > 0 && r.height > 0 && !parked(r) && getComputedStyle(x).visibility !== 'hidden';
   }).length, 0);
   // What could be clicked when each item was pointed at, so a click on something that wasn't there yet
   // shows it was revealed by pointing, even when the menu is drawn elsewhere on the page. Taken at most every
@@ -507,7 +509,7 @@ function captureInit() {
   const reallyShown = el => {
     if (!canSee(el)) return false;
     const r = el.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1) return false;
+    if (r.width < 1 || r.height < 1 || parked(r)) return false;
     const x = r.x + r.width / 2, y = r.y + r.height / 2;
     if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return true;
     const hit = document.elementFromPoint(x, y);
@@ -521,12 +523,16 @@ function captureInit() {
   let lastAction = 0;
   addEventListener('keydown', e => { if (e.isTrusted && e.key !== 'Shift') { lastAction = Date.now(); shown.t = 0; } }, true);
   addEventListener('wheel', e => { if (e.isTrusted) { lastAction = Date.now(); shown.t = 0; } }, {capture: true, passive: true});
-  addEventListener('mouseover', e => {
-    if (!e.isTrusted) return;
+  // (pointerover comes before anything the site does when the pointer arrives, such as opening a menu on
+  // pointerenter; mouseover comes after.)
+  addEventListener('pointerover', e => {
+    if (!e.isTrusted || e.pointerType === 'touch') return;
     const el = closestAcross(real(e), INTERACTIVE);
     if (!el || el === pointed.at(-1)?.el) return;
     const areas = menuArea(el);
-    pointed = [...pointed.filter(p => p.el !== el), {el, t: Date.now(), areas, before: visibleIn(areas), seen: shownNow()}].slice(-6);
+    pointed = [...pointed.filter(p => p.el !== el), {el, t: Date.now(), areas, before: visibleIn(areas), seen: shownNow()}]
+      // Enough to get from the item that opened a big menu to a link at its far end, past the items between.
+      .filter(p => Date.now() - p.t <= 20000).slice(-40);
   }, true);
   // The item most recently pointed at (since your last click or key press) that revealed the clicked item.
   const openedBy = el => {
@@ -624,10 +630,13 @@ function captureInit() {
     let sc = real(e);
     while (sc && sc !== document.body && sc !== document.documentElement && !scrollable(sc)) sc = up(sc);
     const inner = sc && sc !== document.body && sc !== document.documentElement;
-    // Wheeling over an iframe that can't scroll itself (an ad, an embed) scrolls the page around it.
-    const page = window.top !== window && !inner && document.scrollingElement.scrollHeight <= innerHeight + 1;
-    send({kind: 'wheel', dy: e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY, container: inner ? targetFor(sc) : null,
-      page: page || undefined});
+    const dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY, container = inner ? targetFor(sc) : null;
+    // Wheeling over an iframe that can't scroll itself (an ad, an embed) scrolls the page around it. (Some
+    // are taller than they show but can't scroll, so see whether the frame actually moved.)
+    if (window.top === window || inner) return send({kind: 'wheel', dy, container});
+    const root = document.scrollingElement ?? document.documentElement, before = root.scrollTop;
+    if (root.scrollHeight <= innerHeight + 1) return send({kind: 'wheel', dy, container, page: true});
+    setTimeout(() => send({kind: 'wheel', dy, container, page: root.scrollTop === before || undefined}), 150);
   }, {capture: true, passive: true});
 }
 
@@ -810,12 +819,24 @@ class Actor {
   async acquire(target, timeout) {
     // What was found can vanish before it's reached: a menu that closes as the page finishes loading,
     // say. Then look again (reopening the menu) rather than aim at nothing.
+    // Some sites keep a closed menu parked above or left of the page, where no scrolling reaches; to the
+    // browser it's still showing. Open its menu first, as for a hidden one.
     const until = Date.now() + timeout;
+    let opened = false;
     for (;;) {
       const found = await this.acquireOnce(target, timeout);
-      if (found.box.width > 0 && found.box.height > 0) return found;
+      const parked = await found.loc.evaluate(el => {
+        const r = el.getBoundingClientRect();
+        return r.right + scrollX <= 0 || r.bottom + scrollY <= 0;
+      }).catch(() => false);
+      if (found.box.width > 0 && found.box.height > 0 && !parked) return found;
       timeout = until - Date.now();
       if (timeout < 1000) throw new Error('Element has no box (hidden or detached)');
+      if (parked) {
+        if (opened) throw new Error(`Couldn't open the menu that holds ${describeTarget(target)}`);
+        opened = await this.openMenuFor(target);
+        if (!opened) throw new Error(`${describeTarget(target)} is off the page, in a menu that couldn't be opened`);
+      }
     }
   }
 
@@ -929,7 +950,8 @@ class Actor {
       const found = await match.evaluateHandle(el => {
         const shown = n => {
           const s = getComputedStyle(n), r = n.getBoundingClientRect();
-          return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.05;
+          return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.05 &&
+            r.right + scrollX > 0 && r.bottom + scrollY > 0; // not parked off the page
         };
         const closed = n => !shown(n) || n.getAttribute('aria-hidden') === 'true' || n.hasAttribute('inert');
         const up = n => n.parentElement ?? (n.parentNode instanceof ShadowRoot ? n.parentNode.host : null);
@@ -2108,8 +2130,10 @@ function liveShortcutInit() {
     window.__standInLiveToggle().catch(error => console.error(`Stand-in recording control failed: ${error.message}`));
   const DOUBLE_SHIFT_MS = 500;
   let lastShift = 0;
-  addEventListener('keydown', e => {
-    if (!e.isTrusted) return;
+  const onKey = e => {
+    // (Each key once, though a frame may have this listener twice: its own and the one added from outside.)
+    if (!e.isTrusted || e.__standInShortcut) return;
+    e.__standInShortcut = true;
     if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.repeat) { lastShift = 0; return; }
       const now = e.timeStamp;
@@ -2126,8 +2150,23 @@ function liveShortcutInit() {
     e.preventDefault();
     e.stopImmediatePropagation();
     toggle();
-  }, true);
-  for (const type of ['pointerdown', 'wheel']) addEventListener(type, () => { lastShift = 0; }, true);
+  };
+  const reset = () => { lastShift = 0; };
+  addEventListener('keydown', onKey, true);
+  for (const type of ['pointerdown', 'wheel']) addEventListener(type, reset, true);
+  // Frames a site writes itself (a bot check's "Press & hold", say) may not get this script. While one of
+  // those has the keyboard, listen there too, so the shortcut still works. (Adding the same listener
+  // again does nothing; it's added back if the site clears it.)
+  setInterval(() => {
+    for (const f of document.querySelectorAll('iframe,frame')) {
+      try {
+        const w = f.contentWindow;
+        if (!w) continue;
+        w.addEventListener('keydown', onKey, true);
+        for (const type of ['pointerdown', 'wheel']) w.addEventListener(type, reset, true);
+      } catch {} // another site's frame: it has its own copy of this script
+    }
+  }, 500);
 }
 
 async function liveRecording({ctx, page, plan, videoPath, startRecording = recordToFile, capture}) {
@@ -2334,7 +2373,9 @@ async function frameChain(frame) {
         ((/\d/.test(p) && /[A-Z]/.test(p.slice(1))) ||
          (p.length <= 10 && (p.match(/[A-Z]/g) ?? []).length >= 2 && /[a-z]/.test(p) && !/^[A-Z]?[a-z]+(?:[A-Z][a-z]+)*$/.test(p))));
       const tag = n.tagName.toLowerCase(), q = v => JSON.stringify(v);
-      if (n.getAttribute('title')) return `${tag}[title=${q(n.getAttribute('title'))}]`;
+      // (Only a title no other frame has: ad frames often share one, "3rd party ad content".)
+      const title = n.getAttribute('title'), titled = title && `${tag}[title=${q(title)}]`;
+      if (titled && document.querySelectorAll(titled).length === 1) return titled;
       if (n.id && !made(n.id)) return `#${CSS.escape(n.id)}`;
       if (n.getAttribute('name') && !made(n.getAttribute('name'))) return `${tag}[name=${q(n.getAttribute('name'))}]`;
       const src = n.getAttribute('src');
