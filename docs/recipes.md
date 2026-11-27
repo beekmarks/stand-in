@@ -97,6 +97,23 @@ If the step clicks a link in a menu that opens when you point at a nav item, rep
 If it can't find the nav item, add a step just before it that points at the item, for example
 `{"action": "hover", "target": {"role": "link", "name": "Planning & Advice"}}`.
 
+## Replay fails on a site that worked when I recorded it
+
+The site probably changed between visits, or noticed that a program is controlling the browser:
+
+- **It showed a security check** ("Just a moment…", "Verify you are human", a slider or "Press & Hold").
+  Look at the end of the `-incomplete` video. A replay can't pass these checks, and Stand-in doesn't
+  try. Wait a while and replay again, or record again by hand.
+- **It looked different the second time.** Replay reuses your browser session, so the site sees a
+  returning visitor. It may show another home page, or keep a language or region you chose during the
+  recording. Change the step to something on the page it shows now, or record again.
+- **What you clicked was gone.** Headlines, reviews, offers and ads change from visit to visit. Edit
+  the step to click something lasting, such as a menu or a section link, or mark it `"optional": true`.
+- **It wanted you to sign in.** Sign in during a new recording so the session is saved, then replay.
+
+Before asking an assistant to make a demo of a new site, record a short one by hand. You'll see
+quickly whether the site works with Stand-in at all.
+
 ## I recorded sensitive information
 
 Stand-in has no automatic redaction. Review the entire MP4 and use video editing software to remove

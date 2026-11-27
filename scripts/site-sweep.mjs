@@ -83,7 +83,7 @@ async function doubleShift(page) {
   await cdp.detach().catch(() => {});
 }
 
-const BLOCKED = /access denied|just a moment|attention required|verify (that )?you are (a )?human|are you a robot|robot or human|captcha|pardon our interruption|request (was )?blocked|unusual traffic|403 forbidden|bot detected|security check|quick verification|press (&|and) hold|not a bot|confirm you'?re (a )?human|having a technical issue/i;
+const BLOCKED = /access denied|just a moment|attention required|verify (that )?you are (a )?human|are you a robot|robot or human|captcha|pardon our interruption|request (was )?blocked|unusual traffic|403 forbidden|bot detected|security check|quick verification|press (&|and) hold|not a bot|confirm you'?re (a )?human|having a technical issue|verification system|verification required|unusual activity/i;
 // Cookie buttons, in English and the languages of the extended set's sites outside the US.
 const CONSENT = /^\s*(reject all|reject|decline( all)?|necessary (cookies )?only|only (allow )?(essential|necessary)( cookies)?|accept( all)?( cookies)?|allow( all)?( cookies)?|agree( and (proceed|continue))?|i agree|i accept|got it|ok(ay)?|continue|alle ablehnen|ablehnen|alle akzeptieren|akzeptieren|zustimmen|einverstanden|tout refuser|refuser|tout accepter|accepter|j'accepte|continuer sans accepter|rechazar( todo| todas)?|aceptar( todo| todas| y cerrar)?|rifiuta( tutto| tutti)?|accetta( tutto| tutti)?|accetto|rejeitar( todos)?|aceitar( todos| tudo)?|alles accepteren|weigeren|(すべて)?同意(する)?|すべて許可|拒否(する)?|(모두 )?동의|거부|확인)\s*$/i;
 
@@ -92,7 +92,9 @@ const CONSENT = /^\s*(reject all|reject|decline( all)?|necessary (cookies )?only
 function visitor(page, did) {
   const tabs = () => page.context().pages().filter(p => !p.url().startsWith('devtools')).length;
   const blockedNow = async () => {
-    const words = await page.evaluate(() => `${document.title} ${document.body?.innerText.slice(0, 1500) ?? ''}`).catch(() => '');
+    // (A bot check can also arrive as a frame over the page, such as "DataDome CAPTCHA".)
+    const words = await page.evaluate(() => `${document.title} ${document.body?.innerText.slice(0, 1500) ?? ''} ${
+      [...document.querySelectorAll('iframe[title]')].filter(f => f.getBoundingClientRect().width > 50).map(f => f.title).join(' ')}`).catch(() => '');
     return BLOCKED.test(words) ? (BLOCKED.exec(words)?.[0] ?? 'blocked') : null;
   };
   // Sites can start blocking partway through, after a few pages; note that too.
@@ -360,7 +362,8 @@ function planIssues(steps, did) {
   const issues = [];
   const {matched} = matchSteps(steps, did);
   for (const s of steps) {
-    const bad = [s.target, s.around].flatMap(t => t && typeof t === 'object' ? [...idsIn(t.css), ...idsIn(t.frame)] : typeof t === 'string' ? idsIn(t) : [])
+    // (A step replay may skip, such as closing an ad, can't break the replay.)
+    const bad = s.optional ? [] : [s.target, s.around].flatMap(t => t && typeof t === 'object' ? [...idsIn(t.css), ...idsIn(t.frame)] : typeof t === 'string' ? idsIn(t) : [])
       .filter(generatedId);
     if (bad.length) issues.push(`uses a name the site makes up afresh on each visit (${bad.join(', ')}) in a ${s.action} step`);
   }

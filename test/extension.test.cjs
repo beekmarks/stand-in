@@ -198,7 +198,7 @@ test('when the video is ready, VS Code says so and offers to open it', async () 
     plan: '/work space/demos/example.com-2026-11-21-14-05.json'});
   assert.equal(messages.length, 1);
   assert.equal(messages[0].kind, 'info');
-  assert.match(messages[0].message, /video is ready: example\.com-2026-11-21-14-05\.mp4/);
+  assert.equal(messages[0].message, 'Your video is ready: /work space/recordings/example.com-2026-11-21-14-05.mp4');
   assert.deepEqual(messages[0].items, ['Open Video', 'Show in Folder', 'Open Replay Plan']);
   assert.deepEqual(opened, [{file: '/work space/recordings/example.com-2026-11-21-14-05.mp4'}]);
 });
@@ -220,7 +220,7 @@ test('a failed replay with a partial video warns and still offers the video', as
   await finish({ok: false, video: '/r/demo-replay-incomplete.mp4', plan: '/plans/demo.json',
     error: 'Step 2 of 5 failed: click the link “Next”\n  details'});
   assert.equal(messages[0].kind, 'warning');
-  assert.match(messages[0].message, /stopped early.*Step 2 of 5 failed/);
+  assert.match(messages[0].message, /stopped early; the video so far is saved in \/r\/demo-replay-incomplete\.mp4\. Step 2 of 5 failed/);
   assert.doesNotMatch(messages[0].message, /details/);
 });
 

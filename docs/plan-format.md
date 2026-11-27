@@ -21,7 +21,9 @@ later **browser replay**; it does not modify the original video. A generated pla
 `url` is the actual page at the start of capture. `profileDir` is relative to the plan and contains
 the browser session; do not share it. A replay using a session asks for approval. `viewport`, `fps`,
 `pace` (`relaxed`, `normal`, or `brisk`), `cursor`, `accent`, `zoom`, `leadInMs`, `tailMs` and `timeout`
-are optional settings. `audio` enables tab audio for replay. `--output` chooses a new replay video path.
+are optional settings. `leadInMs` is how long the replay shows the first page before the first step
+(3000, three seconds, unless set). `audio` enables tab audio for replay. `--output` chooses a new replay
+video path.
 
 ## Targets
 
@@ -71,7 +73,8 @@ Any step can specify `pauseAfter`, `timeout`, or `optional: true`. Optional step
 skipped with a note in the terminal. Recording marks clicks that close a pop-up, cookie notice or banner
 as `"optional": true, "timeout": 3000`, since sites often don't show them again. When you click a link in a
 menu that opened because you pointed at a nav item, recording adds an optional `hover` step for that nav
-item first.
+item first. Resting the pointer on something that opens a menu or shows a tip, without clicking, becomes a
+`hover` step with `"ms": 1000`, so the replay holds it there for a second.
 On replay, if a step's target is hidden in a closed menu, Stand-in points at (or clicks) the item that
 opens it, so older plans without the `hover` step still work. Password input is not captured;
 replace `SET-ME` placeholders only after reviewing the plan and the sensitivity of the value. Captured
@@ -83,9 +86,9 @@ actions are approximate: review selectors, waits, navigation and session state b
 When you submit a question in a text field (press Enter, or click a button such as Send right after
 typing) and then wait for the answer, the captured plan gets a `waitForStable` step whose `around` is the
 question box, so replay waits for the answer however long it takes. If the page went to a new address
-after you submitted, as with a search, the pause stays a fixed `wait`. Other pauses are fixed `wait`
-steps too, shortened to 3 seconds when you hesitated longer; their `note` says so, and you can raise
-`ms` to keep more. In a hand-written plan, the step looks like this:
+after you submitted, as with a search, the pause stays a fixed `wait`. Other pauses of more than a
+couple of seconds become one-second `wait` steps, so the replay moves briskly; their `note` says how
+long you actually paused, and you can raise `ms` to keep more. In a hand-written plan, the step looks like this:
 
 ```json
 {"action": "type", "target": {"placeholder": "Ask a question"}, "text": "How do I open an account?", "submit": true},

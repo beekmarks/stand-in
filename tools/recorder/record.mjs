@@ -534,6 +534,42 @@ function captureInit() {
       // Enough to get from the item that opened a big menu to a link at its far end, past the items between.
       .filter(p => Date.now() - p.t <= 20000).slice(-40);
   }, true);
+  // Pointing that shows something to look at, with no click after it: a menu, or a tip that appears when
+  // you rest on an item. When the pointer has rested on an item for a moment and something new has
+  // appeared there (and nothing else happened meanwhile, such as scrolling), record pointing at it.
+  const TIPS = '[role=tooltip],[role=menu],[role=listbox]';
+  const POINTABLE = `${INTERACTIVE},[aria-describedby],[aria-haspopup],[aria-expanded],[data-tooltip],[data-tip]`;
+  const tipsFor = el => {
+    const described = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+      .map(id => el.getRootNode().getElementById?.(id) ?? document.getElementById(id)).filter(Boolean);
+    return [...document.querySelectorAll(TIPS), ...described].filter(reallyShown);
+  };
+  const near = (a, b, gap = 400) => {
+    const r = a.getBoundingClientRect(), q = b.getBoundingClientRect();
+    return Math.max(r.left - q.right, q.left - r.right, r.top - q.bottom, q.top - r.bottom) <= gap;
+  };
+  let resting = null;
+  addEventListener('pointerover', e => {
+    if (!e.isTrusted || e.pointerType === 'touch') return;
+    const el = closestAcross(real(e), POINTABLE);
+    if (!el || el === resting?.el) return;
+    clearTimeout(resting?.timer);
+    const r = {el, t: Date.now(), seen: shownNow(), tips: new Set(tipsFor(el)), expanded: el.getAttribute('aria-expanded')};
+    r.timer = setTimeout(() => {
+      if (resting !== r || r.left || !el.isConnected || lastAction >= r.t) return;
+      const areas = menuArea(el);
+      const revealed = tipsFor(el).some(x => !r.tips.has(x)) ||
+        (el.getAttribute('aria-expanded') === 'true' && r.expanded !== 'true') ||
+        [...document.querySelectorAll(SHOWN_ITEMS)].some(x => !r.seen.has(x) && x !== el && !x.contains(el) &&
+          (areas.some(a => a.contains(x)) || near(x, el)) && reallyShown(x));
+      if (revealed) send({kind: 'hover', target: targetFor(el), reveals: true});
+    }, 700);
+    resting = r;
+  }, true);
+  // (Not :hover, which the browser doesn't always update when something appears beside the pointer.)
+  addEventListener('pointerout', e => {
+    if (e.isTrusted && resting && resting.el.contains(real(e)) && !resting.el.contains(e.relatedTarget)) resting.left = true;
+  }, true);
   // The item most recently pointed at (since your last click or key press) that revealed the clicked item.
   const openedBy = el => {
     for (const p of [...pointed].reverse()) {
@@ -595,9 +631,15 @@ function captureInit() {
       send({kind: 'click', target: p.target, dismiss: p.dismiss || undefined});
     }, 80);
   }, true);
+  // Typing counts only in a frame the person has used (clicked, pressed a key, pasted or dropped
+  // something in). Scripts can put text in a box in ways the browser counts as real, as bot checks do
+  // when probing the browser from a frame of their own, and those mustn't become steps. (Not tied to key
+  // presses: autofill and dictation type without them.)
+  let used = false;
+  for (const type of ['pointerdown', 'keydown', 'paste', 'drop']) addEventListener(type, e => { if (e.isTrusted) used = true; }, true);
   addEventListener('input', e => {
     const el = real(e);
-    if (!e.isTrusted || !isText(el)) return;
+    if (!e.isTrusted || !isText(el) || !used) return;
     const secret = el.type === 'password';
     // A search box: what you type there brings up results, not a chat answer next to the box.
     const words = `${el.type ?? ''} ${el.getAttribute('role') ?? ''} ${el.name ?? ''} ${el.id ?? ''} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder ?? ''}`;
@@ -640,7 +682,8 @@ function captureInit() {
   }, {capture: true, passive: true});
 }
 
-const PAUSE_MS = 3000; // longest pause kept from a recording, in the video and in its replay plan
+const PAUSE_MS = 3000; // longest pause kept in a recording's video
+const PLAN_PAUSE_MS = 1000; // longest pause between steps kept in its replay plan
 
 class StepBuilder {
   constructor() {
@@ -683,12 +726,11 @@ class StepBuilder {
       this.steps.push({action: 'waitForStable', around: field, ...(minMs ? {minMs} : {}), pauseAfter: 2500,
         note: `captured: you waited ${(g / 1000).toFixed(1)}s for an answer here`});
     } else {
-      // Anything else was hesitation, not something the viewer needs to see: keep at most 3 s of it.
-      // (Waits for pages and answers are separate steps and keep their full length.)
-      const ms = Math.round(g / 100) * 100;
-      this.steps.push(ms > PAUSE_MS
-        ? {action: 'wait', ms: PAUSE_MS, note: `captured: you paused ${(g / 1000).toFixed(1)}s here; shortened (raise ms to keep more)`}
-        : {action: 'wait', ms});
+      // Anything else was hesitation, not something the viewer needs to see: keep a second of it, so the
+      // replay moves briskly from one step to the next. (Waits for pages and answers are separate steps
+      // and keep their full length.)
+      this.steps.push({action: 'wait', ms: PLAN_PAUSE_MS,
+        note: `captured: you paused ${(g / 1000).toFixed(1)}s here; shortened (raise ms to keep more)`});
     }
   }
   // Chat boxes often fire one more input event right after Enter (the newline, or the box being cleared).
@@ -735,12 +777,14 @@ class StepBuilder {
         break;
       }
       case 'press': this.steps.push({action: 'press', key: ev.key}); break;
-      // Pointing at a nav item opened the menu clicked next.
       case 'hover': {
         const prev = this.steps.at(-1);
-        if (!(['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)))
-          // Only a help for the next click (which opens the menu itself if it must), so not worth failing over.
-          this.steps.push({action: 'hover', target, ms: 500, optional: true, timeout: 3000});
+        if (['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)) break;
+        // Pointing that showed something to look at (a menu or a tip): part of the demo, so hold it there.
+        if (ev.reveals) this.steps.push({action: 'hover', target, ms: 1000});
+        // Pointing at a nav item opened the menu clicked next. Only a help for that click (which opens the
+        // menu itself if it must), so not worth failing over.
+        else this.steps.push({action: 'hover', target, ms: 500, optional: true, timeout: 3000});
         break;
       }
       case 'drag': this.steps.push({action: 'drag', target, to: withFrame(ev.to)}); break;
@@ -1892,7 +1936,7 @@ function interrupted(signal) {
     if (process.stderr.isTTY) process.stderr.write('\n');
     if (interruption.converting) {
       rmSync(interruption.converting.temporary, {force: true});
-      log(`Stopped before the video was finished. The original recording is kept: ${shown(interruption.converting.file)}`);
+      log(`Stopped before the video was finished. The original recording is kept: ${resolve(interruption.converting.file)}`);
     } else if (interruption.count === 1) log('Stopping…');
     Promise.race([interruption.cleanup(), sleep(5000)]).catch(() => {}).finally(exit);
     return;
@@ -1923,7 +1967,7 @@ async function loadPlan(file) {
 function normalisePlan(raw, urlOverride) {
   const plan = {
     viewport: {width: 1920, height: 1080}, zoom: 1, fps: 60, audio: false, cursor: true, pace: 'normal',
-    leadInMs: 800, tailMs: 1500, timeout: 10000, steps: [], ...raw,
+    leadInMs: 3000, tailMs: 1500, timeout: 10000, steps: [], ...raw,
   };
   if (urlOverride) plan.url = urlOverride;
   if (!plan.url) die('Plan has no "url".');
@@ -2537,6 +2581,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
       await page.evaluate(() => { window.focus(); document.activeElement?.blur?.(); }).catch(() => {});
       const terminal = terminalControl({page, toggle, interrupt});
       log(`Ready. Press Shift twice, quickly, in the page to start recording${process.stdin.isTTY ? ' (or press Enter here)' : ''}.`);
+      log(`The video will be saved in ${dirname(resolve(videoPath))}`);
       log('Everything in this tab is recorded; the video, plan and .sessions folder can contain private information.');
       let result;
       try { result = await done; } finally { terminal.close(); }
@@ -2549,6 +2594,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
     page.on('dialog', d => { log(`Accepting browser ${d.type()} dialog during replay.`); d.accept().catch(e => log(`Dialog failed: ${e.message}`)); });
     keepInOneTab(ctx, page, {active: () => !page.isClosed()});
     log(`Replaying ${shown(planPath)} on ${plan.url}`);
+    if (!options.rehearse) log(`The video will be saved in ${dirname(resolve(videoPath))}`);
     try {
       await page.goto(plan.url, {waitUntil: 'load', timeout: 45000});
     } catch (error) {
@@ -2579,7 +2625,14 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
         try {
           await Promise.race([crash, (async () => {
             const began = Date.now();
-            await actor.run(step, timeout);
+            try { await actor.run(step, timeout); } catch (error) {
+              // The page went on to a new one partway through (a search that loads its results late, say).
+              // A step that only looks or moves can simply run again on the new page.
+              if (!/context was destroyed|because of a navigation|frame (was|got) detached/i.test(error?.message ?? '') ||
+                !['scroll', 'hover', 'move', 'highlight', 'caption', 'wait', 'waitFor', 'waitForStable'].includes(step.action)) throw error;
+              await page.waitForLoadState('load', {timeout: 15000}).catch(() => {});
+              await actor.run(step, timeout);
+            }
             if (step.action === 'waitForStable' && step.around && step.requireChange !== false && actor.lastWait?.warning)
               throw new AssistantResponseError(actor.lastWait.warning);
             await actor.settle(began);
@@ -2617,9 +2670,10 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
     // Chrome has closed; now make the video play everywhere and say where it is.
     if (saved?.video && existsSync(saved.video)) {
       const length = await finishVideo({chromium, chromePath, file: saved.video, convert, trim: saved.trim});
-      if (saved.trim && saved.plan && existsSync(saved.plan)) log(`Replay plan: ${shown(saved.plan)}`);
-      if (saved.incomplete) log(`Saved what was recorded before the problem: ${shown(saved.video)}`);
-      else log(`Your video is ready: ${shown(saved.video)}${length}`);
+      // In full, so it can be found whatever folder the terminal is in.
+      if (saved.trim && saved.plan && existsSync(saved.plan)) log(`Replay plan: ${resolve(saved.plan)}`);
+      if (saved.incomplete) log(`Saved what was recorded before the problem: ${resolve(saved.video)}`);
+      else log(`Your video is ready: ${resolve(saved.video)}${length}`);
       await writeResult({ok: !failure, video: saved.video, plan: saved.plan, error: failure?.message});
     }
   }

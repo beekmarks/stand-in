@@ -101,8 +101,11 @@ the [plan reference](docs/plan-format.md)).
 
 What to expect from replay:
 
-- **It keeps your timing, minus the hesitation.** Your pauses are kept up to 3 seconds each. Waits for
-  pages, and for chat assistants to finish answering, last as long as they need.
+- **It starts calmly and moves briskly.** The first page shows for three seconds before anything
+  happens. After that, wherever you paused, the replay pauses for one second. Waits for pages, and for
+  chat assistants to finish answering, last as long as they need.
+- **It shows what you pointed at.** Resting the pointer on something that opens a menu or shows a tip,
+  without clicking, is a step too, and the replay holds it there for a second.
 - **It copes with sites that change a little.** Pop-ups and cookie notices you closed are skipped if
   they don't appear again. Counts and other numbers in link names can change.
 - **It tells you exactly what to fix.** If a step can't be done, the replay stops and names the step
@@ -120,13 +123,38 @@ To try replay without recording anything, download this repository (**Code > Dow
 **Stand-in: Replay Plan**, and select `demos/sample/assistant-tour.json`. It runs on a fictional site
 included in the repository.
 
+## Sites that push back
+
+Many sites protect themselves from automated browsers, and Stand-in's Chrome is one: Stand-in controls
+it, the same way test tools do. Most sites don't mind, but some do, and no tool should get around that.
+What you may see:
+
+- **A security check.** "Just a moment…", "Verify you are human", "Press & Hold" or a slider puzzle,
+  either instead of the page or partway through. While recording, complete it yourself if it lets you;
+  the check is then part of the video, so you may want to record again later. A replay can't pass it,
+  so it stops at the step after.
+- **A different page on the next visit.** Replay reuses your browser session, so the site sees a
+  returning visitor. Some sites then show another home page, remember a language or region you chose,
+  or skip a welcome offer, and a step that depended on them fails.
+- **Content that changes every visit.** Headlines, reviews, recommendations and ads rotate. A plan that
+  clicks one of them breaks when it's gone; click something lasting, such as a menu or a section link.
+- **A sign-in page instead.** Some links, such as to LinkedIn or to an account area, lead to a sign-in
+  page when you aren't signed in to that site.
+
+**Try a site by hand first.** Before asking an assistant to make a demo of a site, record a short one
+yourself. A minute of clicking around shows whether the site lets Stand-in in, whether it asks for
+checks or sign-in, and what's lasting enough to show. Then you know that a failed demo of that site
+is worth fixing, and the assistant can work from what you saw. If you're recording for colleagues,
+replay your own plan once too, to make sure it works the second time.
+
 ## Other ways to use Stand-in
 
 **Ask an assistant.** With GitHub Copilot in VS Code, you can describe the demo instead of performing it:
 
 > Use Stand-in to open https://www.wikipedia.org, search for space exploration, and show the result.
 
-The extension includes this skill. It can also be [installed on its own](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension),
+Try the site by hand first (see [Sites that push back](#sites-that-push-back)). The extension
+includes this skill. It can also be [installed on its own](docs/company-pilot-guide.md#option-2-use-the-copilot-skill-without-the-extension),
 which needs Node.js 22 or newer. The assistant won't sign in for you.
 
 **Command line.** From a source checkout, with Node.js 22+ and Chrome 153+:

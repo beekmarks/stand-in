@@ -75,3 +75,36 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 For either workflow, the video captures everything visible in the tab; plans and browser sessions may
 also contain sensitive information. Advise review before sharing and use of video editing software for
 cleanup. Report network, site and replay failures rather than bypassing protections or claiming success.
+
+## When something doesn't work
+
+Stand-in handles many site quirks, but a site it hasn't met can still do something it doesn't handle. When
+a recording, a plan or a replay goes wrong, find out what happened before changing anything: read the
+recorder's message (a failed replay names the step and the reason), the plan step, and the page or video
+if you can see them. Then tell the person which of these it is:
+
+- **The site.** It blocks automated browsers or shows a bot check; it changed since the recording (content
+  that rotates, a page that looks different to a returning visitor, another language or region); or the
+  network failed. Say so, and don't bypass protections.
+- **The plan.** The site renamed a target, the target uses a name the site makes up on each visit (a `css`
+  or `testId` with random letters and digits in it), a step needs a longer `timeout`, or a click that
+  doesn't matter should be `"optional": true`. Fix the step using the plan reference, and rehearse only
+  with approval.
+- **Stand-in itself.** It recorded the wrong thing or missed a step (such as pointing at a menu that the
+  plan leaves out), the shortcut didn't respond, it hung or crashed, it saved a broken video, or replay
+  acted on the wrong element. Don't work around it with your own browser scripts or by editing the
+  recorder.
+
+For a problem with Stand-in itself, say plainly that it looks like a gap in Stand-in, and write a short
+report the person can send to its maintainers as an issue at https://github.com/beekmarks/stand-in/issues:
+
+- what they were doing: the site's address and the steps, in plain words;
+- what they expected, and what happened instead;
+- the recorder's message, word for word, and the plan steps involved;
+- the Stand-in version (in the `package.json` next to the recorder), the operating system, and Chrome's
+  version;
+- whether it happens again on a second try, and with a fresh session (a new `profileDir`).
+
+Leave out sign-in details, account numbers and other personal information, and ask before including the
+video or the plan file. Then help the person carry on: an edited plan, an optional step, or recording that
+part themselves.

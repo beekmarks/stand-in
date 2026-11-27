@@ -99,13 +99,14 @@ function createCommands(vscode, extensionPath, {runtime = () => recorderRuntime(
       else if (choice === 'Open Replay Plan') await vscode.window.showTextDocument(vscode.Uri.file(result.plan));
     };
     if (result.ok && result.video) {
-      const choice = await vscode.window.showInformationMessage(`Your video is ready: ${path.basename(result.video)}`,
+      // The full path, so it's clear where the video went.
+      const choice = await vscode.window.showInformationMessage(`Your video is ready: ${result.video}`,
         'Open Video', 'Show in Folder', ...(result.plan ? ['Open Replay Plan'] : []));
       return open(choice);
     }
     if (result.video) {
       const choice = await vscode.window.showWarningMessage(
-        `The replay stopped early; the video so far is saved. ${String(result.error ?? '').split('\n')[0]}`,
+        `The replay stopped early; the video so far is saved in ${result.video}. ${String(result.error ?? '').split('\n')[0]}`,
         'Open Video', ...(result.plan ? ['Open Replay Plan'] : []));
       return open(choice);
     }

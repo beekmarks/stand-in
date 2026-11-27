@@ -348,7 +348,8 @@
       "description": "Declare a signed-in plan so replay requires approval."
     },
     "leadInMs": {
-      "type": "number"
+      "type": "number",
+      "description": "How long a replay shows the first page before the first step, in milliseconds. Default 3000."
     },
     "tailMs": {
       "type": "number"

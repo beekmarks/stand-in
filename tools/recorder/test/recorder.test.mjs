@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {spawn, spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {once} from 'node:events';
-import {mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {join, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -267,6 +267,33 @@ test('live shortcut works in focused iframes across navigation', async () => {
   } finally { await ctx.close(); }
 });
 
+test('text a bot check puts in its own frame is not recorded as typing', async () => {
+  // As DataDome's check does: a script in a frame the person never touched types into a box there.
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const file = join(dir, 'bot-typing.html'), probe = join(dir, 'bot-probe.html');
+  const planPath = join(dir, 'bot-typing.json');
+  try {
+    await writeFile(probe, `<div contenteditable></div><script>
+      setTimeout(() => { const d = document.querySelector('div'); d.focus(); document.execCommand('insertText', false, 'abc  ghi'); }, 1500);
+      </script>`);
+    await writeFile(file, `<input aria-label="Name"><iframe title="Verification system" src="bot-probe.html"></iframe>`);
+    const plan = {fps: 30, viewport: {width: 640, height: 480}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'bot-typing.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(pathToFileURL(file).href);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByLabel('Name').pressSequentially('Ann', {delay: 40});
+    await page.waitForTimeout(2500);
+    await page.mainFrame().evaluate(() => document.querySelector('input').focus());
+    await doubleShift(page);
+    await done;
+    const typed = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action === 'type');
+    assert.deepEqual(typed.map(s => s.text), ['Ann'], JSON.stringify(typed));
+  } finally { await ctx.close(); }
+});
+
 test('the shortcut works in a frame the site writes itself, as bot checks do', async () => {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
@@ -450,7 +477,11 @@ test('the one-command CLI saves both files', {skip: process.platform === 'win32'
     assert.ok(videoBytes.includes('avcC') && !videoBytes.includes('av1C'), 'The video was not converted to H.264');
     // The H.264 level must allow 60 fps at this size (level 3.1 here), or strict players refuse or stutter.
     assert.ok(videoBytes[videoBytes.indexOf('avcC') + 7] >= 31, 'H.264 level too low for 60 fps');
-    assert.match(output, /Your video is ready: recordings\//);
+    // Where everything went, in full, so it can be found from anywhere.
+    const real = await realpath(cwd);
+    assert.ok(output.includes(`The video will be saved in ${join(real, 'recordings')}`), output);
+    assert.ok(output.includes(`Your video is ready: ${join(real, 'recordings', videoName)}`), output);
+    assert.ok(output.includes(`Replay plan: ${join(real, 'demos', planName)}`), output);
     const plan = JSON.parse(await readFile(join(cwd, 'demos', planName), 'utf8'));
     assert.equal(plan.url, url);
     assert.ok(plan.steps.some(s => s.action === 'click' && s.target?.name === 'Click me'));
@@ -559,6 +590,33 @@ test('links in menus that open on hover or click are recorded and replayed', {sk
       assert.match(result.output, /opening the menu/);
     }
   } finally { await run.close(); }
+});
+
+test('a step that only looks is run again when the page moves on partway through it', {timeout: 90000}, async () => {
+  // As on AccuWeather: a search loads its results page a moment late, in the middle of the next step.
+  const tall = '<div style="height:3000px"></div><p id="end">End</p>';
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(req.url.startsWith('/results') ? `<h1>Results</h1>${tall}`
+      : `<button onclick="setTimeout(() => location.href = '/results', 1500)">Search</button>${tall}`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const cwd = join(dir, 'late-nav');
+  try {
+    await mkdir(cwd, {recursive: true});
+    const planPath = join(cwd, 'late.json');
+    await writeFile(planPath, JSON.stringify({url: `http://127.0.0.1:${server.address().port}/`, viewport: {width: 640, height: 480},
+      steps: [{action: 'click', target: {role: 'button', name: 'Search'}, pauseAfter: 0},
+        {action: 'scroll', to: {css: '#end'}, duration: 2500},
+        {action: 'waitFor', target: {role: 'heading', name: 'Results'}, timeout: 5000}]}));
+    const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless', '--rehearse'],
+      {cwd, stdio: ['ignore', 'pipe', 'pipe']});
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { output += data; });
+    const [code] = await once(child, 'close');
+    assert.equal(code, 0, output);
+  } finally { server.close(); }
 });
 
 test('recording works on a page that removes every listener while loading', {skip: process.platform === 'win32', timeout: 90000}, async () => {
@@ -691,6 +749,7 @@ test('one capture saves video and replayable actions after signed-in preparation
       await waitForLiveState(page, 'recording');
       await page.getByRole('link', {name: 'Next'}).click();
       const frame = page.frameLocator('#demo-frame');
+      await frame.getByLabel('Message').click();
       await frame.getByLabel('Message').fill('hello');
       await frame.getByRole('button', {name: 'Send'}).click();
       await page.waitForTimeout(1000);
@@ -744,7 +803,7 @@ test('one capture saves video and replayable actions after signed-in preparation
           video.onloadedmetadata = resolve;
           video.onerror = () => reject(new Error('Replay MP4 could not be decoded'));
         });
-        video.currentTime = 2;
+        video.currentTime = 4; // after the three-second hold on the first page
         await new Promise(resolve => { video.onseeked = resolve; });
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth; canvas.height = video.videoHeight;
@@ -908,6 +967,46 @@ customElements.define('code-box', class extends HTMLElement {
     '<div class="editor"><div class="content" contenteditable="true" style="min-height:40px;border:1px solid #999"></div></div>'; }
 });
 </script>`;
+
+test('pointing that shows a tip or a menu is recorded even without a click', {timeout: 60000}, async () => {
+  const html = `<p><a href="#plain">Just a link</a></p>
+    <p><button aria-describedby="tip" id="info">Fees</button><span role="tooltip" id="tip" hidden>No fees on index funds</span></p>
+    <nav><ul style="list-style:none;padding:0"><li id="item"><a href="#plans">Plans</a>
+      <ul id="menu" style="display:none;list-style:none"><li><a href="/basic">Basic</a></li><li><a href="/plus">Plus</a></li></ul></li></ul></nav>
+    <p id="rest" style="margin-top:200px">Somewhere else</p>
+    <script>
+      info.addEventListener('pointerenter', () => tip.hidden = false);
+      info.addEventListener('pointerleave', () => tip.hidden = true);
+      item.addEventListener('pointerenter', () => menu.style.display = 'block');
+      item.addEventListener('pointerleave', () => menu.style.display = 'none');
+    </script>`;
+  const ctx = await browser.newContext({viewport: {width: 800, height: 600}});
+  const page = await ctx.newPage();
+  const file = join(dir, 'pointing-shows.html'), planPath = join(dir, 'pointing-shows.json');
+  try {
+    await writeFile(file, html);
+    const plan = {fps: 30, viewport: {width: 800, height: 600}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'pointing-shows.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(pathToFileURL(file).href);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    // Passing over a plain link, resting on it, shows nothing new: not a step.
+    await page.getByRole('link', {name: 'Just a link'}).hover();
+    await page.waitForTimeout(1200);
+    await page.getByRole('button', {name: 'Fees'}).hover();
+    await page.waitForTimeout(1200);
+    await page.getByRole('link', {name: 'Plans'}).hover();
+    await page.waitForTimeout(1200);
+    await page.getByText('Somewhere else').hover();
+    await page.waitForTimeout(500);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps, [{action: 'hover', target: {role: 'button', name: 'Fees'}, ms: 1000},
+      {action: 'hover', target: {role: 'link', name: 'Plans'}, ms: 1000}], JSON.stringify(steps));
+  } finally { await ctx.close(); }
+});
 
 test('pointing that opens a menu kept above the page until then is recorded', {timeout: 60000}, async () => {
   // As on Fidelity: the menu is always there, parked above the top of the page, and moves into place when
@@ -1483,7 +1582,7 @@ test('a failed replay explains the step in plain words and keeps the video so fa
     assert.match(output, /Step 2 of 2 failed: click the button “Pay now”\n {2}Couldn't find the button “Pay now” on the page within 2 seconds\./);
     assert.match(output, /edit step 2 in demos\/checkout\.json/);
     assert.doesNotMatch(output, /\n\s+at .*\.m?js:\d+/, 'No stack trace for a problem the person can fix');
-    assert.match(output, /Saved what was recorded before the problem: recordings\/checkout-replay-incomplete\.mp4/);
+    assert.match(output, /Saved what was recorded before the problem: \S*\/recordings\/checkout-replay-incomplete\.mp4/);
     assert.ok((await readFile(join(cwd, 'recordings', 'checkout-replay-incomplete.mp4'))).length > 1000);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
@@ -1509,7 +1608,7 @@ test('hesitations are shortened in the plan, but waits for answers are not', () 
   b.add({kind: 'click', target: link, t: 14700}, null); // 2.5 s: kept as it was
   const steps = b.finish(15000);
   const waits = steps.filter(s => s.action === 'wait');
-  assert.equal(waits[0].ms, 3000);
+  assert.equal(waits[0].ms, 1000, 'a second of it is kept, so the replay moves briskly');
   assert.match(waits[0].note, /paused 11\.2s.*shortened/);
   assert.equal(waits.length, 1, 'short pauses need no wait step');
 });
@@ -1590,7 +1689,7 @@ test('Ctrl+C during a replay keeps the video so far', {skip: process.platform ==
     child.kill('SIGINT');
     await exited;
     assert.match(output, /Stopped with Ctrl\+C/);
-    assert.match(output, /Saved what was recorded before the problem: recordings\/long-replay-incomplete\.mp4/);
+    assert.match(output, /Saved what was recorded before the problem: \S*\/recordings\/long-replay-incomplete\.mp4/);
     assert.ok((await readFile(join(cwd, 'recordings', 'long-replay-incomplete.mp4'))).includes('avcC'));
     assert.equal(existsSync(join(cwd, 'recordings', 'long-replay.mp4')), false);
   } finally { await new Promise(resolve => server.close(resolve)); }

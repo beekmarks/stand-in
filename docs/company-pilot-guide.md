@@ -89,6 +89,10 @@ If GitHub Copilot is available in your VS Code setup, you can describe the demo 
 it. For example: “Use Stand-in to open Wikipedia, search for space exploration, and show the result.”
 You'll still need to sign in yourself and approve any signed-in replay.
 
+Try the site by hand first. Some sites show security checks to browsers controlled by a program, or a
+different page on a second visit, and a quick recording of your own shows whether that happens before
+you ask an assistant. See [Sites that push back](https://github.com/beekmarks/stand-in#sites-that-push-back).
+
 ## Option 2: use the Copilot skill without the extension
 
 **Pilot note:** Discovery of the standalone skill in VS Code has not yet been verified.
