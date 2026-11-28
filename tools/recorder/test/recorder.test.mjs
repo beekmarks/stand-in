@@ -1600,6 +1600,62 @@ test('command-line mistakes get one plain sentence, not a stack trace', () => {
   assert.doesNotMatch(ftp.stderr, /\n\s+at /);
 });
 
+test('a plan can set the cursor, click effects, caption size and the pause after each step', {timeout: 90000}, async () => {
+  const {normalisePlan, overlayInit} = await import('../record.mjs');
+  const plan = normalisePlan({url: 'x', steps: [], cursorColor: '#ff0000', cursorSize: 48, clickEffect: false, captionSize: 50});
+  assert.equal(plan.overlay.captionSize, 50);
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  try {
+    await page.addInitScript(overlayInit, plan.overlay);
+    await page.goto('data:text/html,<button style="margin:100px">Go</button>');
+    await page.mouse.move(120, 120);
+    await page.mouse.click(120, 120);
+    await page.waitForTimeout(100);
+    const look = await page.evaluate(() => {
+      const root = document.querySelector('demo-overlay').shadowRoot, cur = root.querySelector('.cur');
+      return {width: cur.getBoundingClientRect().width, fill: cur.querySelector('path').getAttribute('fill'), rings: root.querySelectorAll('.rip').length};
+    });
+    assert.deepEqual(look, {width: 48, fill: '#ff0000', rings: 0});
+  } finally { await ctx.close(); }
+  // pauseAfter applies to every step that doesn't set its own.
+  const timed = async extra => {
+    const planPath = join(dir, `paced-${Object.keys(extra).length}.json`);
+    await writeFile(planPath, JSON.stringify({url: 'data:text/html,<p>Hi</p>', viewport: {width: 640, height: 480}, leadInMs: 0, ...extra,
+      steps: [{action: 'move', x: 10, y: 10}, {action: 'move', x: 50, y: 50}, {action: 'move', x: 90, y: 90}]}));
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless', '--rehearse'], {encoding: 'utf8'});
+    assert.equal(result.status, 0, result.stderr);
+    return Date.now() - started;
+  };
+  const quick = await timed({}), slow = await timed({pauseAfter: 1500});
+  assert.ok(slow - quick > 3500, `pauseAfter 1500 on 3 steps added only ${slow - quick} ms`);
+});
+
+test('a caption stays on screen across pages until the next one', async () => {
+  const {Actor, normalisePlan, overlayInit} = await import('../record.mjs');
+  const plan = normalisePlan({url: 'x', steps: []});
+  const ctx = await browser.newContext({viewport: {width: 640, height: 480}});
+  const page = await ctx.newPage();
+  try {
+    await writeFile(join(dir, 'caption-a.html'), '<a href="caption-b.html">Next</a>');
+    await writeFile(join(dir, 'caption-b.html'), '<p>Second page</p>');
+    await page.addInitScript(overlayInit, plan.overlay);
+    await page.goto(pathToFileURL(join(dir, 'caption-a.html')).href);
+    const actor = new Actor(page, {viewport: {width: 640, height: 480}, pace: 'brisk'});
+    await actor.run({action: 'caption', text: 'Open the next page'}, 3000);
+    const began = Date.now();
+    await actor.run({action: 'click', target: {role: 'link', name: 'Next'}}, 3000);
+    await actor.settle(began); // as replay does after each step
+    await page.waitForURL(/caption-b/);
+    const shown = await page.evaluate(() => {
+      const cap = document.querySelector('demo-overlay')?.shadowRoot.querySelector('.cap');
+      return cap?.classList.contains('on') && cap.textContent;
+    });
+    assert.equal(shown, 'Open the next page');
+  } finally { await ctx.close(); }
+});
+
 test('hesitations are shortened in the plan, but waits for answers are not', () => {
   const b = new StepBuilder();
   const link = {role: 'link', name: 'Next'}, other = {role: 'link', name: 'Back'};

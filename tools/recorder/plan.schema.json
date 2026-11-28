@@ -328,13 +328,36 @@
         "relaxed",
         "normal",
         "brisk"
-      ]
+      ],
+      "description": "Overall speed of the replay: relaxed is about a third slower than normal, brisk about a third faster."
     },
     "cursor": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Show the replay's cursor (default true). false also hides click effects."
     },
     "accent": {
-      "type": "string"
+      "type": "string",
+      "description": "Color of click effects and highlights, as CSS (default #f5b400)."
+    },
+    "cursorColor": {
+      "type": "string",
+      "description": "Fill color of the replay's cursor, as CSS (default #ffffff, white with a dark outline)."
+    },
+    "cursorSize": {
+      "type": "number",
+      "description": "Size of the replay's cursor in pixels (default 28)."
+    },
+    "clickEffect": {
+      "type": "boolean",
+      "description": "Show a ring where the replay clicks (default true)."
+    },
+    "captionSize": {
+      "type": "number",
+      "description": "Caption text size in pixels at 1080p; scaled to other video sizes (default 34)."
+    },
+    "pauseAfter": {
+      "type": "number",
+      "description": "Pause after every step, in milliseconds, unless a step sets its own pauseAfter. Without it, each kind of step has its own short pause (about half a second for a click)."
     },
     "constantFrameRate": {
       "type": "boolean"
@@ -352,7 +375,8 @@
       "description": "How long a replay shows the first page before the first step, in milliseconds. Default 3000."
     },
     "tailMs": {
-      "type": "number"
+      "type": "number",
+      "description": "How long the replay keeps recording after the last step, in milliseconds. Default 1500."
     },
     "timeout": {
       "type": "number"

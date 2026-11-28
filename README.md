@@ -115,6 +115,44 @@ What to expect from replay:
   changes on signed-in sites. A plan you recorded replays without asking. One that is new to Stand-in or
   has been edited is shown to you once: type **y** in the terminal only if you approve its actions.
 
+### The five things people change most
+
+Open the plan (**Open Replay Plan**), change it, and replay. Settings go at the top of the plan, next to
+`"url"`; captions go in its `"steps"`.
+
+1. **How long the first page shows.** `"leadInMs": 3000` is three seconds before the first action.
+   `"tailMs": 1500` is how long the video runs on after the last one.
+2. **The time between actions.** `"pauseAfter": 1000` pauses a second after every step (each step can
+   also have its own `"pauseAfter"`). `"pace": "relaxed"` or `"brisk"` slows down or speeds up the
+   whole replay, cursor included. To linger at one point, add a step such as
+   `{"action": "wait", "ms": 2000}`.
+3. **Captions.** Add `{"action": "caption", "text": "Search for a fund"}` before the step it describes;
+   it stays on screen until the next caption, or `{"action": "caption", "text": null}` to clear it.
+   `"captionSize": 40` makes captions bigger. To draw attention to something, add
+   `{"action": "highlight", "target": {"text": "Expense ratio"}, "ms": 1500}`.
+4. **The cursor and clicks.** `"cursorColor": "#111111"` and `"cursorSize": 36` change the cursor.
+   `"accent": "#0b6bcb"` changes the color of the ring shown on each click and of highlights, and
+   `"clickEffect": false` turns the ring off. `"cursor": false` hides the cursor altogether.
+5. **The size of the video.** `"viewport": {"width": 1920, "height": 1080}` sets it, and `"zoom": 1.25`
+   enlarges the page so small text is readable.
+
+For example:
+
+```json
+{
+  "url": "https://www.example.com/",
+  "leadInMs": 2000,
+  "pauseAfter": 800,
+  "accent": "#0b6bcb",
+  "steps": [
+    {"action": "caption", "text": "Find the pricing page"},
+    {"action": "click", "target": {"role": "link", "name": "Pricing"}}
+  ]
+}
+```
+
+Everything else is in the [plan reference](docs/plan-format.md).
+
 **Demoing a chat assistant?** Ask your question, then wait for the whole answer before doing anything
 else. Replay then waits for the answer, however long it takes. See
 [Waiting for chat answers](docs/plan-format.md#waiting-for-chat-answers).

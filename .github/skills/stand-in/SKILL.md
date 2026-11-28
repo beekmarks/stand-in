@@ -19,6 +19,10 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 - If they want to operate the site themselves, use **Manual recording**.
 - Ask for the URL or essential actions if missing. Do not ask them to choose a workflow if their request
   already makes it clear.
+- Before making a demo of a site for the first time, suggest the person record a short one by hand
+  first, unless they already have. Some sites show security checks to browsers controlled by a program,
+  look different on a second visit, or need a sign-in, and a quick manual recording shows that before
+  you plan steps around it. If they'd rather go ahead, do.
 
 ## Assistant-directed recording
 
@@ -45,10 +49,11 @@ are required. Do not write custom browser scripts or edit recorder internals whe
    the person must complete it using the manual recording workflow; never sign in or solve MFA for them.
    A session may expire or not be accepted by the site. Before **each** signed-in replay or rehearsal,
    explain the actions, get explicit approval, and only then pass `--confirm-signed-in`.
-6. Confirm the command succeeded and the reported video exists and is nonempty. Review the video or
-   resulting page when a suitable tool is available. A successful command alone proves the steps ran, not
-   that the desired content appeared. Report what was verified, any limitations, and the video and plan
-   paths. The plan can be edited and replayed later.
+6. Confirm the command succeeded and the reported video exists and is nonempty. The replay's output
+   lists every step as it runs, so you can confirm each one ran; that proves the steps ran, not that the
+   video looks the way the person wants. Don't claim to have reviewed the video. Report what you
+   verified, give the full video and plan paths, and ask the person to watch the video and say what to
+   change. The plan can be edited and replayed later.
 
 ## Manual recording
 
@@ -75,6 +80,61 @@ are required. Do not write custom browser scripts or edit recorder internals whe
 For either workflow, the video captures everything visible in the tab; plans and browser sessions may
 also contain sensitive information. Advise review before sharing and use of video editing software for
 cleanup. Report network, site and replay failures rather than bypassing protections or claiming success.
+
+## Changing an existing plan
+
+People most often ask to change five things: the start, the timing, captions, the cursor and clicks,
+and the video's size. Do these by editing the plan in `demos/`, not by recording again. Read the whole
+plan first. Keep its existing steps, targets, `url` and `profileDir`, and change only what was asked.
+When the person names no plan, use the newest one in `demos/` and say which you chose. Replaying makes
+a new video and keeps the old one.
+
+**1. The start and the end.** Top-level `leadInMs` is how long the first page shows before the first
+step (default 3000). `tailMs` is how long the video runs on after the last step (default 1500).
+"Start more slowly" means a larger `leadInMs`; "it ends too abruptly" means a larger `tailMs`.
+
+**2. Timing between actions.**
+- Top-level `pauseAfter` (ms) sets the pause after every step, captions and highlights included. Without
+  it, each kind of step has its own short pause (about half a second after a click). A step's own
+  `pauseAfter` wins over the top-level one.
+- `pace` (`relaxed`, `normal`, `brisk`) scales everything, cursor movement and all pauses included.
+  Use it for "slower" or "faster" overall; use `pauseAfter` for "longer gaps between steps" when the
+  movement itself is fine.
+- To linger at one point, insert `{"action": "wait", "ms": 2000}` after that step. Recorded plans
+  already have `wait` steps with a `note` where the person paused: change their `ms` to lengthen or
+  shorten those pauses; don't delete them unless asked.
+
+**3. Captions and highlights.**
+- A caption is a step of its own: `{"action": "caption", "text": "Search for a fund"}`. It appears when
+  the replay reaches it and stays on screen, across page changes, until the next caption step.
+  `{"action": "caption", "text": null}` removes it, for example before the end.
+- Put a caption just before the first step of the action it describes. If a `hover` step leads into a
+  click (pointing at a menu, then clicking an item in it), put the caption before the `hover`. Don't
+  caption `wait` or `scroll` steps, or optional clicks that close pop-ups; the caption before them stays
+  up anyway. "A caption for each step" means one per meaningful action, not per line of JSON.
+- Keep captions short, one line of a few words, in the person's language. Write the text from what the
+  step does (its target's name), and ask if the purpose isn't clear.
+- Top-level `captionSize` (default 34, at 1080p) makes all captions bigger or smaller.
+- A highlight draws a box around something: `{"action": "highlight", "target": <target>, "ms": 1500}`
+  (default 1400 ms). Use the same kind of target as the plan's other steps; copy one if it already
+  targets the thing.
+
+**4. The cursor and clicks.** Top-level `cursorColor` (fill, as CSS; default white with a dark outline),
+`cursorSize` (pixels, default 28), `accent` (color of the click ring and highlights; default
+`#f5b400`), `clickEffect: false` (no click ring) and `cursor: false` (no cursor or click ring at all).
+
+**5. The size of the video.** Top-level `viewport` (`{"width": 1920, "height": 1080}` by default) sets
+the video size, and `zoom` (such as `1.25`) enlarges the page so small text is readable. Both change the
+page's layout. A narrower viewport or a larger zoom can turn a site's menu into a "hamburger" button
+and hide what a step clicks, so rehearse with approval, or warn the person, after changing them.
+
+Anything not covered here is in the plan reference. Before replaying, check that the plan still parses
+as JSON (for example with `node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" <plan>`).
+Tell the person what you changed, and where in the plan. Editing a plan that uses a saved session
+doesn't change the rule above: explain the actions, get approval, and only then pass
+`--confirm-signed-in`. After the replay, confirm from its output that every step ran, including each
+caption and highlight. Then ask the person to watch the video and judge whether it looks right; don't
+claim to have checked that yourself.
 
 ## When something doesn't work
 

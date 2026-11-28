@@ -137,7 +137,8 @@ function overlayInit(opts) {
   let root, cursor, caption, x = -100, y = -100, shown = false;
   const css = `
     :host { all: initial; position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; }
-    .cur { position: fixed; left: 0; top: 0; width: 28px; height: 28px; margin: -3px 0 0 -4px; opacity: 0;
+    .cur { position: fixed; left: 0; top: 0; width: ${opts.cursorSize}px; height: ${opts.cursorSize}px;
+      margin: ${-opts.cursorSize * 3 / 28}px 0 0 ${-opts.cursorSize * 4 / 28}px; opacity: 0;
       filter: drop-shadow(0 2px 3px rgba(0,0,0,.45)); transition: opacity .2s, scale .12s; transform-origin: 4px 3px; }
     .cur.on { opacity: 1; } .cur.down { scale: .86; }
     .rip { position: fixed; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
@@ -217,7 +218,7 @@ function overlayInit(opts) {
     if (!ensure()) return;
     place();
     cursor?.classList.add('down');
-    if (!opts.cursor) return;
+    if (!opts.cursor || !opts.clicks) return;
     const r = document.createElement('div'); r.className = 'rip';
     r.style.left = cx + 'px'; r.style.top = cy + 'px';
     root.append(r); setTimeout(() => r.remove(), 650);
@@ -1481,7 +1482,7 @@ class Actor {
         }
         break;
       }
-      case 'caption': await p.evaluate(t => {
+      case 'caption': this.captionText = step.text ?? null; await p.evaluate(t => {
         if (!window.__demoOverlay) throw new Error('Replay overlay is unavailable.');
         window.__demoOverlay.caption(t);
       }, step.text ?? null); break;
@@ -1518,6 +1519,8 @@ class Actor {
     // Let web fonts finish, but not forever: on some pages a font never finishes loading.
     try { await this.page.evaluate(() => Promise.race([document.fonts?.ready, new Promise(r => setTimeout(r, 3000))])); } catch {}
     try { await this.page.mouse.move(this.mouse.x, this.mouse.y); } catch {}
+    // A caption stays on screen until the next one, so show it again on a new page.
+    if (this.captionText) try { await this.page.evaluate(t => window.__demoOverlay?.caption(t), this.captionText); } catch {}
   }
 }
 
@@ -1973,8 +1976,10 @@ function normalisePlan(raw, urlOverride) {
   if (!plan.url) die('Plan has no "url".');
   if (!Array.isArray(plan.steps)) die('Plan "steps" must be an array.');
   plan.viewport = {width: 1920, height: 1080, ...plan.viewport};
-  plan.overlay = {cursor: plan.cursor !== false, keepAlive: plan.constantFrameRate !== false, accent: plan.accent ?? '#f5b400', cursorColor: '#ffffff', cursorStroke: '#111111',
-    captionSize: Math.round(plan.viewport.height / 1080 * 34), ...(plan.overlay ?? {})};
+  plan.overlay = {cursor: plan.cursor !== false, keepAlive: plan.constantFrameRate !== false, accent: plan.accent ?? '#f5b400',
+    cursorColor: plan.cursorColor ?? '#ffffff', cursorStroke: '#111111', cursorSize: plan.cursorSize ?? 28,
+    clicks: plan.clickEffect !== false, captionSize: Math.round(plan.viewport.height / 1080 * (plan.captionSize ?? 34)),
+    ...(plan.overlay ?? {})};
   return plan;
 }
 
@@ -2484,7 +2489,8 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
     if (!raw || typeof raw !== 'object' || Array.isArray(raw))
       throw new UserError('The replay plan must be a JSON object.');
     const supported = new Set(['$schema', 'description', 'notes', 'url', 'steps', 'viewport', 'zoom', 'fps', 'audio',
-      'pace', 'cursor', 'accent', 'constantFrameRate', 'profileDir', 'signedIn', 'leadInMs', 'tailMs', 'timeout', 'chrome', 'overlay']);
+      'pace', 'cursor', 'accent', 'cursorColor', 'cursorSize', 'clickEffect', 'captionSize', 'pauseAfter', 'constantFrameRate',
+      'profileDir', 'signedIn', 'leadInMs', 'tailMs', 'timeout', 'chrome', 'overlay']);
     const unsupported = Object.keys(raw).filter(key => !supported.has(key));
     if (unsupported.length)
       throw new UserError(`Unsupported plan fields: ${unsupported.join(', ')}. Older profile, setup, masking and private workflows were removed; existing files are unchanged.`);
@@ -2636,7 +2642,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
             if (step.action === 'waitForStable' && step.around && step.requireChange !== false && actor.lastWait?.warning)
               throw new AssistantResponseError(actor.lastWait.warning);
             await actor.settle(began);
-            await actor.wait(step.pauseAfter ?? actor.defaultPauseAfter(step));
+            await actor.wait(step.pauseAfter ?? plan.pauseAfter ?? actor.defaultPauseAfter(step));
           })()]);
         } catch (error) {
           if (error instanceof UserError && !step.optional) throw error; // crashed or stopped
@@ -2680,7 +2686,8 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
   if (failure) throw failure;
 }
 
-export {Actor, captureInit, keepEvalInit, keepInOneTab, listenersInit, oneTabInit, findChrome, keepWholeFragments, liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
+export {Actor, captureInit, keepEvalInit, keepInOneTab, listenersInit, normalisePlan, oneTabInit, overlayInit, findChrome, keepWholeFragments,
+  liveCapture, liveRecording, makePlayable, recordToFile, requireSupportedNode, StepBuilder};
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)
   quickMain().catch(async error => {

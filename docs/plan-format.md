@@ -19,11 +19,29 @@ later **browser replay**; it does not modify the original video. A generated pla
 ```
 
 `url` is the actual page at the start of capture. `profileDir` is relative to the plan and contains
-the browser session; do not share it. A replay using a session asks for approval. `viewport`, `fps`,
-`pace` (`relaxed`, `normal`, or `brisk`), `cursor`, `accent`, `zoom`, `leadInMs`, `tailMs` and `timeout`
-are optional settings. `leadInMs` is how long the replay shows the first page before the first step
-(3000, three seconds, unless set). `audio` enables tab audio for replay. `--output` chooses a new replay
-video path.
+the browser session; do not share it. A replay using a session asks for approval. `audio` enables tab
+audio for replay. `--output` chooses a new replay video path.
+
+## Settings
+
+All are optional, and go at the top of the plan beside `url`.
+
+| Setting | What it changes | Default |
+| --- | --- | --- |
+| `leadInMs` | How long the first page shows before the first step, in ms | `3000` |
+| `tailMs` | How long the video runs on after the last step, in ms | `1500` |
+| `pauseAfter` | Pause after every step, in ms; a step's own `pauseAfter` wins | about 500, by kind of step |
+| `pace` | Speed of the whole replay, cursor and pauses included: `relaxed`, `normal` or `brisk` | `normal` |
+| `captionSize` | Caption text size in pixels at 1080p | `34` |
+| `cursor` | Show the cursor; `false` also hides click effects | `true` |
+| `cursorColor` | Cursor fill color, as CSS | `#ffffff` |
+| `cursorSize` | Cursor size in pixels | `28` |
+| `accent` | Color of the click ring and highlights, as CSS | `#f5b400` |
+| `clickEffect` | Show a ring where the replay clicks | `true` |
+| `viewport` | Video size, `{"width": …, "height": …}` | 1920×1080 |
+| `zoom` | Enlarge the page, such as `1.25`, so small text is readable | `1` |
+| `fps` | Frames per second | `60` |
+| `timeout` | How long each step waits for its target, in ms | `10000` |
 
 ## Targets
 
