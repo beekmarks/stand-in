@@ -82,9 +82,10 @@ as HandBrake.
 ## Replay asks for confirmation or fails
 
 Replay runs the plan's actions on the website again; it is not a video player. Those actions can change
-real data, because replay uses your saved browser session. A plan you recorded replays without asking.
-When it's new to Stand-in or has changed since (edited, or from someone else), the terminal asks once:
-review the JSON plan, then type **y** and press Enter only if you approve.
+real data, because replay uses your saved browser session. A plan you recorded replays without asking,
+even after you edit it. When Stand-in didn't record it here (a plan from someone else, or one moved to
+another folder), the terminal asks once: review the JSON plan, then type **y** and press Enter only if
+you approve.
 
 If a page, selector, or signed-in session has changed, replay may fail. The terminal says which step
 failed and why, and saves the video up to that point with `-incomplete` in its name. Sign in during a new

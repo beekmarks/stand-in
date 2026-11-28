@@ -67,7 +67,8 @@ once you sign in, the next recording starts signed in too.
 **While you record.** The tab's title shows ● and the time. Everything happens in the one tab Stand-in
 opened: links and buttons that would open a new tab open right there instead, so they're in the video.
 The address bar, browser dialogs and sound aren't recorded, and neither are pop-up windows a site needs
-to keep separate, such as a sign-in window. Pause whenever you like, because long pauses are shortened.
+to keep separate, such as a sign-in window. Going back or forward with the browser's buttons is
+recorded, as going to that page. Pause whenever you like, because long pauses are shortened.
 
 **When you stop.** Chrome closes and the video is ready a few seconds later, roughly a quarter of the
 recording's length on a typical laptop. The terminal shows its length, such as
@@ -112,8 +113,9 @@ What to expect from replay:
   and the reason, such as "Couldn't find the link “Pricing” on the page within 10 seconds." The video
   up to that point is saved with `-incomplete` in its name. Edit that step and replay again.
 - **It asks before acting as you, when needed.** Replays use your saved session, so they can make real
-  changes on signed-in sites. A plan you recorded replays without asking. One that is new to Stand-in or
-  has been edited is shown to you once: type **y** in the terminal only if you approve its actions.
+  changes on signed-in sites. A plan you recorded replays without asking, however much you edit it. One
+  Stand-in didn't record here, such as a plan from a colleague, is shown to you once: type **y** in the
+  terminal only if you approve its actions.
 
 ### The five things people change most
 

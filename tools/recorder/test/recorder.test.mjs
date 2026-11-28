@@ -769,7 +769,8 @@ test('one capture saves video and replayable actions after signed-in preparation
       );
     } finally { await ctx.close(); }
     const script = join(root, 'tools/recorder/record.mjs');
-    // A plan you just recorded replays without being asked to confirm it; an edited one is asked about.
+    // A plan you recorded replays without being asked to confirm it, edited or not; one from elsewhere is
+    // asked about.
     // (Not spawnSync: this process is also the web server the replay needs.)
     const rehearse = async () => {
       const child = spawn(process.execPath, [script, 'replay', planPath, '--headless', '--rehearse'], {stdio: ['ignore', 'pipe', 'pipe']});
@@ -781,9 +782,13 @@ test('one capture saves video and replayable actions after signed-in preparation
     const asRecorded = await rehearse();
     assert.equal(asRecorded.code, 0, asRecorded.output);
     await writeFile(planPath, JSON.stringify(saved));
-    const refused = spawnSync(process.execPath, [script, 'replay', planPath, '--headless', '--rehearse'], {encoding: 'utf8'});
+    const edited = await rehearse();
+    assert.equal(edited.code, 0, edited.output);
+    const fromElsewhere = join(dir, 'from-a-colleague.json');
+    await writeFile(fromElsewhere, JSON.stringify(saved));
+    const refused = spawnSync(process.execPath, [script, 'replay', fromElsewhere, '--headless', '--rehearse'], {encoding: 'utf8'});
     assert.notEqual(refused.status, 0);
-    assert.match(refused.stderr, /new or has changed.*\n.*explicit approval/);
+    assert.match(refused.stderr, /didn't record this plan here.*\n.*explicit approval/);
     const replayVideo = join(dir, 'replayed.mp4');
     const child = spawn(process.execPath, [script, 'replay', planPath, '--headless', '--confirm-signed-in', '--output', replayVideo],
       {stdio: ['ignore', 'pipe', 'pipe']});
@@ -817,10 +822,10 @@ test('one capture saves video and replayable actions after signed-in preparation
       }, video.toString('base64'));
       assert.ok(darkPixels > 200, `Replay caption was not visible (${darkPixels} dark pixels)`);
     } finally { await check.close(); }
-    // Approved once, the edited plan isn't asked about again.
+    // Still not asked about after another replay.
     const again = await rehearse();
     assert.equal(again.code, 0, again.output);
-    assert.equal(actionCount, 4); // recording, the first rehearsal, the replay, the second rehearsal
+    assert.equal(actionCount, 5); // recording, the rehearsals of the recorded and edited plan, the replay, the last rehearsal
   } finally {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
@@ -968,6 +973,44 @@ customElements.define('code-box', class extends HTMLElement {
 });
 </script>`;
 
+test('going back in the browser, and typing in a box the site renames, are recorded as you did them', {timeout: 60000}, async () => {
+  // As on Fidelity: the search box's label changes once suggestions appear, and the browser's Back button
+  // is used between pages.
+  const ctx = await browser.newContext({viewport: {width: 800, height: 600}});
+  const page = await ctx.newPage();
+  const a = join(dir, 'history-a.html'), b = join(dir, 'history-b.html'), planPath = join(dir, 'history.json');
+  try {
+    await writeFile(a, `<input aria-label="Search or get a quote" id="q"><p><a href="history-b.html">Open an account</a></p>
+      <p><a href="#rollovers">Rollovers</a></p>
+      <script>q.addEventListener('input', () => { if (q.value.length >= 2) { q.removeAttribute('aria-label'); q.placeholder = 'How can we help?'; } });</script>`);
+    await writeFile(b, '<h1>Open your account</h1>');
+    const plan = {fps: 30, viewport: {width: 800, height: 600}};
+    const capture = await liveCapture({ctx, page, plan, planPath, profileDir: dir});
+    const {done} = await liveRecording({ctx, page, plan, videoPath: join(dir, 'history.mp4'), capture, startRecording: fakeRecorder});
+    await page.goto(pathToFileURL(a).href);
+    await doubleShift(page);
+    await waitForLiveState(page, 'recording');
+    await page.getByLabel('Search or get a quote').click();
+    await page.keyboard.type('What is a 529', {delay: 40});
+    await page.getByRole('link', {name: 'Open an account'}).click();
+    await page.waitForURL(/history-b/);
+    await page.goBack();
+    await page.waitForURL(/history-a/);
+    await page.getByRole('link', {name: 'Rollovers'}).click();
+    await page.waitForTimeout(300);
+    // Back within the same page (the address changed, the page didn't).
+    await page.goBack();
+    await page.waitForTimeout(300);
+    await doubleShift(page);
+    await done;
+    const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
+    assert.deepEqual(steps.map(s => [s.action, s.text ?? s.target?.name ?? s.url?.replace(/.*\//, '')]),
+      [['type', 'What is a 529'], ['click', 'Open an account'], ['goto', 'history-a.html'], ['click', 'Rollovers'],
+        ['goto', 'history-a.html']], JSON.stringify(steps));
+    assert.deepEqual(steps[0].target, {role: 'textbox', name: 'Search or get a quote'});
+  } finally { await ctx.close(); }
+});
+
 test('pointing that shows a tip or a menu is recorded even without a click', {timeout: 60000}, async () => {
   const html = `<p><a href="#plain">Just a link</a></p>
     <p><button aria-describedby="tip" id="info">Fees</button><span role="tooltip" id="tip" hidden>No fees on index funds</span></p>
@@ -1042,6 +1085,8 @@ test('pointing that opens a menu kept above the page until then is recorded', {t
     const steps = JSON.parse(await readFile(planPath, 'utf8')).steps.filter(s => s.action !== 'wait');
     assert.deepEqual(steps.map(s => [s.action, s.target]), [['hover', {testId: 'AccountsTrade'}],
       ['click', {role: 'link', name: 'Portfolio', href: '/portfolio'}]], JSON.stringify(steps));
+    // Pointing only to reach the click: replay carries on without it, since the click opens the menu itself.
+    assert.equal(steps[0].optional, true, JSON.stringify(steps));
     // Replay opens the menu before clicking, even without the pointing step: a link parked off the page
     // can't be clicked where it is.
     const {Actor} = await import('../record.mjs');
@@ -1630,6 +1675,37 @@ test('a plan can set the cursor, click effects, caption size and the pause after
   };
   const quick = await timed({}), slow = await timed({pauseAfter: 1500});
   assert.ok(slow - quick > 3500, `pauseAfter 1500 on 3 steps added only ${slow - quick} ms`);
+});
+
+test('a new page is not held still by a font that never finishes loading', {timeout: 120000}, async () => {
+  // Some sites ask for a font that never arrives. Replay used to wait 3 seconds for it on every new page.
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/font')) return; // never answers
+    res.setHeader('Content-Type', 'text/html');
+    const n = +(req.url.match(/p(\d)/)?.[1] ?? 1), font = req.url.includes('font=1');
+    // (Asked for once the page has loaded, as some sites do, so only the font is left waiting.)
+    res.end(`${font ? `<script>addEventListener('load', () => document.head.insertAdjacentHTML('beforeend',
+      '<style>@font-face{font-family:Slow;src:url(/font.woff2)} body{font-family:Slow,sans-serif}</style>'))</script>` : ''}
+      <h1>Page ${n}</h1><a href="/p${n + 1}${font ? '?font=1' : ''}">Next</a>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const timed = async font => {
+    const planPath = join(dir, `font-${font}.json`);
+    await writeFile(planPath, JSON.stringify({url: `http://127.0.0.1:${server.address().port}/p1${font ? '?font=1' : ''}`,
+      viewport: {width: 640, height: 480}, steps: [1, 2, 3].map(() => ({action: 'click', target: {role: 'link', name: 'Next'}}))}));
+    const started = Date.now();
+    const result = await new Promise(resolve => {
+      const child = spawn(process.execPath, [join(root, 'tools/recorder/record.mjs'), 'replay', planPath, '--headless', '--rehearse'], {stdio: 'ignore'});
+      child.on('close', resolve);
+    });
+    assert.equal(result, 0);
+    return Date.now() - started;
+  };
+  try {
+    const plain = await timed(false), stuck = await timed(true);
+    // (It used to add about 3 seconds a page, 12 in all.)
+    assert.ok(stuck - plain < 6000, `three new pages took ${stuck - plain} ms longer with a font that never loads`);
+  } finally { server.closeAllConnections(); server.close(); }
 });
 
 test('a caption stays on screen across pages until the next one', async () => {

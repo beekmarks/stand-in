@@ -76,9 +76,9 @@ site changes, or after you add captions to the plan. Your first video isn't chan
 
 1. Choose **Open Replay Plan** in the "Your video is ready" message.
 2. Choose **Stand-in: Replay Plan**. The open plan replays straight away.
-3. Replay can make real changes on signed-in sites. A plan you recorded replays without asking. If the
-   plan was edited or came from someone else, the terminal asks once: type **y** and press Enter only if
-   you approve its actions.
+3. Replay can make real changes on signed-in sites. A plan you recorded replays without asking, even
+   after you edit it. If the plan came from someone else, the terminal asks once: type **y** and press
+   Enter only if you approve its actions.
 
 If a step can't be done because the site changed, Stand-in stops, says which step and why, and keeps
 the video up to that point.

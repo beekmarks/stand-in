@@ -3,7 +3,7 @@
 
 import {spawnSync} from 'node:child_process';
 import {existsSync, readdirSync, realpathSync, rmSync} from 'node:fs';
-import {mkdir, open, readFile, rename, rm, writeFile} from 'node:fs/promises';
+import {mkdir, open, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {homedir, platform} from 'node:os';
@@ -638,6 +638,10 @@ function captureInit() {
   // presses: autofill and dictation type without them.)
   let used = false;
   for (const type of ['pointerdown', 'keydown', 'paste', 'drop']) addEventListener(type, e => { if (e.isTrusted) used = true; }, true);
+  // Which box the typing is in, even if the site renames it as you type (a search box whose label
+  // changes once suggestions appear, say), so it stays one step.
+  const fields = new WeakMap();
+  let fieldCount = 0;
   addEventListener('input', e => {
     const el = real(e);
     if (!e.isTrusted || !isText(el) || !used) return;
@@ -646,7 +650,9 @@ function captureInit() {
     const words = `${el.type ?? ''} ${el.getAttribute('role') ?? ''} ${el.name ?? ''} ${el.id ?? ''} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder ?? ''}`;
     const search = el.type === 'search' || el.closest('[role=search],form[role=search]') != null ||
       /\bsearch|searchbox|\bq\b|query|\bfind\b|such|recherch|busca|\bcerca|pesquis|zoek|sök|検索|검색/i.test(words);
-    send({kind: 'input', target: targetFor(el), value: secret ? '' : (el.isContentEditable ? el.innerText : el.value), secret, search: search || undefined});
+    if (!fields.has(el)) fields.set(el, ++fieldCount);
+    send({kind: 'input', target: targetFor(el), field: fields.get(el), value: secret ? '' : (el.isContentEditable ? el.innerText : el.value), secret,
+      search: search || undefined});
   }, true);
   addEventListener('change', e => {
     const el = real(e);
@@ -665,8 +671,22 @@ function captureInit() {
     if (!special.includes(e.key) && !mod) return;
     send({kind: e.key === 'Enter' && !mod && !e.shiftKey && isText(t) ? 'enter' : 'press',
       key: (e.shiftKey && mod ? 'Shift+' : '') + mod + (e.key.length === 1 ? e.key.toUpperCase() : e.key),
-      target: isText(t) ? targetFor(t) : undefined});
+      target: isText(t) ? targetFor(t) : undefined, field: isText(t) ? fields.get(t) : undefined});
   }, true);
+  // Going back or forward with the browser's buttons or shortcuts happens outside the page, so nothing
+  // else records it. Notice arriving that way and record going to that page, or replay would carry on
+  // from the wrong one.
+  if (window.top === window) {
+    const arrived = () => send({kind: 'history', url: location.href});
+    addEventListener('pageshow', e => {
+      if (e.persisted || performance.getEntriesByType('navigation')[0]?.type === 'back_forward') arrived();
+    });
+    // Within the same page (a site that changes its address as you move around it): the browser's own
+    // record of the move says whether it was back or forward, unlike popstate, which a #link fires too.
+    window.navigation?.addEventListener('navigate', e => {
+      if (e.navigationType === 'traverse' && e.destination.sameDocument) send({kind: 'history', url: e.destination.url});
+    });
+  }
   const scrollable = n => /(auto|scroll)/.test(getComputedStyle(n).overflowY) && n.scrollHeight > n.clientHeight;
   addEventListener('wheel', e => {
     if (!e.isTrusted) return;
@@ -694,6 +714,12 @@ class StepBuilder {
   // The recorded tab's main page changed URL at time t (full load or single-page-app route change).
   noteNavigation(t) { this.navT = t; }
   same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  // The box being typed in, by name or by the page's own count of boxes: a site may rename it as you type
+  // (a search box whose label changes once suggestions appear), and it keeps the name it had at first.
+  sameBox(ev, target) {
+    return this.same(this.typing.target, target) ||
+      (ev.field != null && ev.field === this.typing.field && JSON.stringify(target?.frame ?? null) === this.typing.frame);
+  }
   flush() {
     if (!this.typing) return;
     const {target, text, submit, secret, search} = this.typing;
@@ -750,13 +776,17 @@ class StepBuilder {
     if (ev.kind !== 'input' && ev.kind !== 'enter') this.flush();
     if (!this.typing) this.gap(ev.t, frame);
     switch (ev.kind) {
-      case 'input':
-        if (this.typing && !this.same(this.typing.target, target)) this.flush();
-        if (!this.typing) this.typing = {target, text: ev.value, secret: ev.secret, search: ev.search};
+      case 'input': {
+        if (this.typing && !this.sameBox(ev, target)) this.flush();
+        if (!this.typing) this.typing = {target, text: ev.value, secret: ev.secret, search: ev.search, field: ev.field, frame: JSON.stringify(target?.frame ?? null)};
         else this.typing.text = ev.value;
         break;
+      }
+      case 'history':
+        this.steps.push({action: 'goto', url: ev.url, note: 'captured: you went back or forward in the browser'});
+        break;
       case 'enter':
-        if (this.typing && this.same(this.typing.target, target)) {
+        if (this.typing && this.sameBox(ev, target)) {
           this.typing.submit = true;
           this.lastSubmit = {target, text: this.typing.text, t: ev.t};
           this.flush();
@@ -780,7 +810,12 @@ class StepBuilder {
       case 'press': this.steps.push({action: 'press', key: ev.key}); break;
       case 'hover': {
         const prev = this.steps.at(-1);
-        if (['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)) break;
+        if (['click', 'hover'].includes(prev?.action) && this.same(prev.target, target)) {
+          // Pointing that showed a menu, then a click in it: the click opens the menu itself if it must, so
+          // the pointing step isn't worth failing over.
+          if (prev.action === 'hover' && !ev.reveals) Object.assign(prev, {optional: true, timeout: 3000});
+          break;
+        }
         // Pointing that showed something to look at (a menu or a tip): part of the demo, so hold it there.
         if (ev.reveals) this.steps.push({action: 'hover', target, ms: 1000});
         // Pointing at a nav item opened the menu clicked next. Only a help for that click (which opens the
@@ -1516,8 +1551,11 @@ class Actor {
       while (this.navCommitted < this.navStarted && Date.now() < deadline) await sleep(100);
     }
     try { await this.page.waitForLoadState('load', {timeout: 15000}); } catch {}
-    // Let web fonts finish, but not forever: on some pages a font never finishes loading.
-    try { await this.page.evaluate(() => Promise.race([document.fonts?.ready, new Promise(r => setTimeout(r, 3000))])); } catch {}
+    // On a new page, let web fonts finish so text doesn't change as the cursor moves, but briefly: on some
+    // pages a font never finishes loading, and waiting for it would hold every new page still.
+    if (this.navCommitted >= since)
+      try { await this.page.evaluate(() => document.fonts?.status === 'loading' &&
+        Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 800))])); } catch {}
     try { await this.page.mouse.move(this.mouse.x, this.mouse.y); } catch {}
     // A caption stays on screen until the next one, so show it again on a new page.
     if (this.captionText) try { await this.page.evaluate(t => window.__demoOverlay?.caption(t), this.captionText); } catch {}
@@ -2000,22 +2038,29 @@ function approvalsFile(profileDir) { return join(dirname(profileDir), 'approved-
 async function readApprovals(profileDir) {
   try { return JSON.parse(await readFile(approvalsFile(profileDir), 'utf8')); } catch { return {}; }
 }
-async function approvePlan(profileDir, text) {
+// A plan you recorded is yours to edit: once it's saved, changing it doesn't need approval again. Only a
+// plan Stand-in didn't record here (one someone gave you, say) asks first.
+const recordedKey = async path => `recorded:${await realpath(path).catch(() => resolve(path))}`;
+async function approvePlan(profileDir, text, recordedAt) {
   const approvals = await readApprovals(profileDir);
   approvals[planDigest(text)] = new Date().toISOString();
+  if (recordedAt) approvals[await recordedKey(recordedAt)] = new Date().toISOString();
   await mkdir(dirname(approvalsFile(profileDir)), {recursive: true});
   await writeFile(approvalsFile(profileDir), JSON.stringify(approvals, null, 2) + '\n');
 }
-async function confirmSignedInReplay(plan, planText, approved) {
+async function confirmSignedInReplay(plan, planText, approved, planPath) {
   if (!(plan.signedIn || plan.profileDir)) return;
-  if (plan.profileDir && (await readApprovals(plan.profileDir))[planDigest(planText)]) return;
+  if (plan.profileDir) {
+    const approvals = await readApprovals(plan.profileDir);
+    if (approvals[planDigest(planText)] || (planPath && approvals[await recordedKey(planPath)])) return;
+  }
   if (!approved) {
     if (!process.stdin.isTTY || !process.stdout.isTTY)
-      throw new UserError('This plan is new or has changed since it was recorded, and replays can act as you on signed-in sites.\n' +
+      throw new UserError('Stand-in didn\'t record this plan here, and replays can act as you on signed-in sites.\n' +
         '  Review it for actions that change real data, then rerun with --confirm-signed-in (explicit approval).');
     const prompt = createInterface({input: process.stdin, output: process.stdout});
     try {
-      const answer = await prompt.question('This plan is new or has changed since it was recorded. Replays use your saved browser\n' +
+      const answer = await prompt.question('Stand-in didn\'t record this plan here. Replays use your saved browser\n' +
         'session, so on sites where you are signed in it acts as you and can make real changes.\n' +
         'Review the plan first. Replay it? [y/N] ');
       if (!/^(y|yes)$/i.test(answer.trim())) throw new Cancelled('Replay cancelled.');
@@ -2376,7 +2421,7 @@ async function liveCapture({ctx, page, plan, planPath, profileDir}) {
       const text = JSON.stringify(raw, null, 2) + '\n';
       await writeFile(planPath, text, {flag: 'wx'});
       // You recorded this yourself, so replaying it as recorded needs no confirmation.
-      if (profileDir) await approvePlan(profileDir, text).catch(() => {});
+      if (profileDir) await approvePlan(profileDir, text, planPath).catch(() => {});
       // The video is what matters most: a missed action only means the plan may need a step added.
       if (error) log(`An action couldn't be captured, so the replay plan may be missing a step: ${shown(planPath)}. The video is fine.`);
       if (builder.secrets) log('Password input was not captured; replace SET-ME in the replay plan if needed.');
@@ -2499,7 +2544,7 @@ Press Shift twice, quickly, in the page to start and stop recording, or press En
     plan = normalisePlan(await loadPlan(planPath));
     if (plan.steps.some(s => [s.text, s.value, s.label].some(v => typeof v === 'string' && v.startsWith('SET-ME:'))))
       throw new UserError('The plan contains uncaptured password input. Review it and replace SET-ME before replay.');
-    await confirmSignedInReplay(plan, await readFile(planPath, 'utf8'), options['confirm-signed-in']);
+    await confirmSignedInReplay(plan, await readFile(planPath, 'utf8'), options['confirm-signed-in'], planPath);
     if (plan.profileDir && !existsSync(plan.profileDir))
       throw new UserError(`The browser session ${plan.profileDir} is missing; record a new demo or update the plan.`);
     if (options.output) videoPath = resolve(options.output);
